@@ -4,7 +4,7 @@ from abc import abstractmethod, ABC
 from pydantic import BaseModel, computed_field
 
 
-class Record(BaseModel, ABC):
+class IRecord(BaseModel, ABC):
     @computed_field
     @property
     @abstractmethod
@@ -12,7 +12,7 @@ class Record(BaseModel, ABC):
         raise NotImplementedError
 
 
-class ResponseRecord(Record):
+class ResponseRecord(IRecord):
     request_key: str
     response: str
 
@@ -21,7 +21,7 @@ class ResponseRecord(Record):
         return hashlib.md5(self.response.encode()).hexdigest()
 
 
-class EmbeddedRequestRecord(Record):
+class EmbeddedRequestRecord(IRecord):
     vector: list[float]
 
     @property

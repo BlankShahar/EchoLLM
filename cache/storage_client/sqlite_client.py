@@ -8,6 +8,7 @@ class SQLiteClient:
     """
     This SQL client assumes each table has a primary key column named `key`.
     """
+
     def __init__(self, db_path=Path('resources/responses.db')):
         self._db_file = db_path
         self._db_file.mkdir(parents=True, exist_ok=True)
@@ -78,10 +79,33 @@ class SQLiteClient:
         cur = self.execute(f"DELETE FROM {table_name} WHERE key = ?", key)
         return cur.rowcount > 0
 
+    def exists(self, key: str, table_name: str) -> bool:
+        # Validate table and 'key' column
+        cols_cur = self.execute(f'PRAGMA table_info({table_name})')
+        columns = [row[1] for row in cols_cur.fetchall()]
+        if not columns:
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        if "key" not in columns:
+            raise ValueError(f"Table '{table_name}' must have a 'key' column.")
+
+        cur = self.execute(f'SELECT EXISTS(SELECT 1 FROM {table_name} WHERE key = ?)', key)
+        row = cur.fetchone()
+        return bool(row[0]) if row else False
+
     def execute(self, query: str, *params) -> Cursor:
         cursor = self._connection.execute(query, params)
         self._connection.commit()
         return cursor
+
+    def size(self, table_name: str) -> int:
+        # Ensure table exists
+        info_cur = self.execute(f'PRAGMA table_info({table_name})')
+        if not info_cur.fetchall():
+            raise ValueError(f"Table '{table_name}' does not exist.")
+
+        cur = self.execute(f'SELECT COUNT(*) FROM {table_name}')
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
 
     def __del__(self):
         self.disconnect()

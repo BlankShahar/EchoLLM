@@ -16,14 +16,14 @@ class FaissVector(BaseModel):
     original_norm: float | None = None  # only set for COSINE; None for L2/IP
 
 
-class DistanceMethod(Enum):
+class FaissDistanceMethod(Enum):
     COSINE = "cosine"  # cosine similarity - normalize vectors, use IP
     INNER_PRODUCT = "ip"  # raw inner product
     L2 = "l2"  # squared Euclidean
 
 
 class FaissClient:
-    def __init__(self, distance_method: DistanceMethod, index_path: Path = Path('resources/requests.db')):
+    def __init__(self, distance_method: FaissDistanceMethod, index_path: Path = Path('resources/requests.db')):
         self.index_path = index_path
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -39,11 +39,13 @@ class FaissClient:
         self._load()
 
     def fetch_nearest_k(self, vector: list[float], k: int = 100) -> list[list[float]]:
-        if self.index is None or self.index.ntotal == 0 or k <= 0:
+        if k <= 0:
+            raise ValueError('k must be greater than 0!')
+        if self.index is None or self.index.ntotal == 0:
             return []
 
         # query in index-space (normalize only for cosine)
-        q_vec = vector_utils.normalize(vector) if self.distance_method == DistanceMethod.COSINE else vector
+        q_vec = vector_utils.normalize(vector) if self.distance_method == FaissDistanceMethod.COSINE else vector
         xq = np.ascontiguousarray([np.asarray(q_vec, dtype=np.float32)], dtype=np.float32)
 
         k_eff = min(k, self.index.ntotal)
@@ -66,7 +68,7 @@ class FaissClient:
         if key in self._items:
             return key
 
-        if self.distance_method == DistanceMethod.COSINE:
+        if self.distance_method == FaissDistanceMethod.COSINE:
             # store normalized vector in index; keep original norm to reconstruct raw later
             arr_raw = np.asarray(vector, dtype=np.float32)
             norm = float(np.linalg.norm(arr_raw))
@@ -111,6 +113,9 @@ class FaissClient:
         self._persist()
         return True
 
+    def size(self) -> int:
+        return len(self._items)
+
     @staticmethod
     def _reconstruct_original_vector(stored_vector: FaissVector) -> list[float]:
         """Convert stored index-space vector back to raw/original space if possible (undo normalization, for Cosine case)."""
@@ -120,9 +125,9 @@ class FaissClient:
         return stored_vector.vector
 
     def _make_index(self, dim: int) -> faiss.Index:
-        if self.distance_method in (DistanceMethod.COSINE, DistanceMethod.INNER_PRODUCT):
+        if self.distance_method in (FaissDistanceMethod.COSINE, FaissDistanceMethod.INNER_PRODUCT):
             base = faiss.IndexFlatIP(dim)  # cosine uses IP on normalized vectors
-        elif self.distance_method == DistanceMethod.L2:
+        elif self.distance_method == FaissDistanceMethod.L2:
             base = faiss.IndexFlatL2(dim)
         else:
             raise ValueError(f"Unsupported distance method: {self.distance_method}")
@@ -149,8 +154,8 @@ class FaissClient:
         # enforce metric consistency with on-disk metadata
         if meta_method is not None:
             try:
-                stored = DistanceMethod(meta_method) if meta_method in DistanceMethod._value2member_map_ else \
-                    DistanceMethod[meta_method]
+                stored = FaissDistanceMethod(meta_method) if meta_method in FaissDistanceMethod._value2member_map_ else \
+                    FaissDistanceMethod[meta_method]
             except Exception:
                 stored = None
             if stored is not None and stored != self.distance_method:
