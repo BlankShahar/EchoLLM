@@ -35,25 +35,20 @@ class FaissClient:
 
         self._load()
 
-    # ---------- Public API ----------
-
     def fetch_k_closest(self, vector: list[float], k: int = 100) -> list[list[float]]:
         if self.index is None or self.index.ntotal == 0 or k <= 0:
             return []
 
-        arr = np.asarray(vector, dtype=np.float32)
-        if self.distance_method == DistanceMethod.COSINE:
-            norm = float(np.linalg.norm(arr))
-            q = (arr / norm) if norm != 0.0 else arr
-        else:
-            q = arr
-        xq = np.ascontiguousarray([q], dtype=np.float32)
+        # normalize only for cosine
+        q_vec = self._normalize(vector) if self.distance_method == DistanceMethod.COSINE else vector
+        q_arr = np.asarray(q_vec, dtype=np.float32)
+        xq = np.ascontiguousarray([q_arr], dtype=np.float32)
 
         k_eff = min(k, self.index.ntotal)
-        distances, labels = self.index.search(xq, k_eff)  # distances could be similarities, depends on distance metric
+        _, ids = self.index.search(xq, k_eff)  # type: ignore[call-arg]
 
         results: list[list[float]] = []
-        for lid in labels[0]:
+        for lid in ids[0]:
             if lid == -1:
                 continue
             key = self._id_to_key.get(int(lid))
@@ -67,7 +62,7 @@ class FaissClient:
         if key in self._items:
             return key
 
-        vec = self._prepare_vector(vector)
+        vec = self._normalize(vector) if self.distance_method == DistanceMethod.COSINE else vector
 
         # init index if needed
         if self.index is None:
@@ -81,7 +76,7 @@ class FaissClient:
 
         xb = np.ascontiguousarray([vec], dtype=np.float32)
         xids = np.asarray([id_int], dtype=np.int64)
-        self.index.add_with_ids(xb, xids)
+        self.index.add_with_ids(xb, xids)  # type: ignore[call-arg]
 
         self._items[key] = FaissVector(id=id_int, vector=vec)
         self._id_to_key[id_int] = key
@@ -106,16 +101,14 @@ class FaissClient:
         self._persist()
         return True
 
-    # ---------- Internals ----------
-
-    def _prepare_vector(self, vector: list[float]) -> list[float]:
-        """Cast to float32; L2-normalize only for cosine metric."""
+    @staticmethod
+    def _normalize(vector: list[float]) -> list[float]:
+        """L2-normalize a vector. If it's all zeros, return as-is."""
         arr = np.asarray(vector, dtype=np.float32)
-        if self.distance_method == DistanceMethod.COSINE:
-            norm = float(np.linalg.norm(arr))
-            if norm != 0.0:
-                arr = (arr / norm).astype(np.float32)
-        return arr.tolist()
+        norm = float(np.linalg.norm(arr))
+        if norm == 0.0:
+            return arr.tolist()
+        return (arr / norm).tolist()
 
     def _make_index(self, dim: int) -> faiss.Index:
         if self.distance_method in (DistanceMethod.COSINE, DistanceMethod.INNER_PRODUCT):
@@ -166,7 +159,7 @@ class FaissClient:
                 xb = np.asarray(vecs, dtype=np.float32)
                 xids = np.asarray(ids, dtype=np.int64)
                 if xb.size:
-                    self.index.add_with_ids(xb, xids)
+                    self.index.add_with_ids(xb, xids)  # type: ignore[call-arg]
                     faiss.write_index(self.index, self.index_path.__fspath__())
 
     def _persist(self) -> None:
@@ -181,8 +174,7 @@ class FaissClient:
             tmp_index.replace(self.index_path)
 
         # persist metadata (temp then replace)
-        items_dump = {k: (v.model_dump() if hasattr(v, "model_dump") else v.dict())
-                      for k, v in self._items.items()}
+        items_dump = {k: v.model_dump() for k, v in self._items.items()}
         meta = {
             "dim": int(self.dim) if self.dim is not None else None,
             "items": items_dump,
