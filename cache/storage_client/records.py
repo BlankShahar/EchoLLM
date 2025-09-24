@@ -1,12 +1,13 @@
 import hashlib
 from abc import abstractmethod, ABC
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 
 class Record(BaseModel, ABC):
-    @abstractmethod
+    @computed_field
     @property
+    @abstractmethod
     def key(self) -> str:
         raise NotImplementedError
 

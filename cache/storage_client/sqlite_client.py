@@ -5,6 +5,9 @@ from typing import Any
 
 
 class SQLiteClient:
+    """
+    This SQL client assumes each table has a primary key column named `key`.
+    """
     def __init__(self, db_path=Path('resources/responses.db')):
         self._db_file = db_path
         self._db_file.mkdir(parents=True, exist_ok=True)
@@ -18,41 +21,43 @@ class SQLiteClient:
             self._connection.close()
             self._connection = None
 
-    def save(self, record: list[Any], record_key: str, table_name: str):
-        # Discover table columns
-        cols_cur = self._execute(f"PRAGMA table_info({table_name})")
-        columns = [row[1] for row in cols_cur.fetchall()]  # row[1] = column name
+    def save(self, record: dict[str, Any], table_name: str) -> str:
+        if not record:
+            raise ValueError("record must be a non-empty dict")
 
-        if not columns:
+        # Introspect table columns
+        cols_cur = self.execute(f"PRAGMA table_info({table_name})")
+        table_columns = [row[1] for row in cols_cur.fetchall()]  # row[1] = column name
+        if not table_columns:
             raise ValueError(f"Table '{table_name}' does not exist.")
-        if "key" not in columns:
-            raise ValueError(f"Table '{table_name}' must have a 'key' column.")
+        if "key" not in table_columns:
+            raise ValueError(f"Table '{table_name}' must have a 'key' column for upsert.")
 
-        # Map values: 'key' gets record_key; the rest come from `record` in column order
-        non_key_cols = [c for c in columns if c != "key"]
-        if len(record) != len(non_key_cols):
-            raise ValueError(
-                f"Record length ({len(record)}) does not match non-key columns "
-                f"({len(non_key_cols)}): {non_key_cols}"
-            )
+        # Validate provided columns match the table schema
+        unknown_columns = [c for c in record.keys() if c not in table_columns]
+        if unknown_columns:
+            raise ValueError(f"Unknown columns for table '{table_name}': {unknown_columns}")
+        missing_columns = [c for c in table_columns if c not in record]
+        if missing_columns:
+            raise ValueError(f"Missing columns for table '{table_name}': {missing_columns}")
 
-        values_by_col = {"key": record_key}
-        for i, c in enumerate(non_key_cols):
-            values_by_col[c] = record[i]
-        ordered_values = [values_by_col[c] for c in columns]
+        # Build UPSERT
+        non_key_columns = [c for c in table_columns if c != "key"]
+        placeholders = ", ".join(["?"] * len(table_columns))
+        assignments = ", ".join(f"{c}=excluded.{c}" for c in non_key_columns)
 
-        placeholders = ", ".join(["?"] * len(columns))
-        updates = ", ".join(f"{c}=excluded.{c}" for c in non_key_cols)
-
-        self._execute(
-            f"INSERT INTO {table_name} ({', '.join(columns)}) "
+        sql = (
+            f"INSERT INTO {table_name} ({', '.join(table_columns)}) "
             f"VALUES ({placeholders}) "
-            f"ON CONFLICT(key) DO UPDATE SET {updates}",
-            *ordered_values,
+            f"ON CONFLICT(key) DO UPDATE SET {assignments}"
         )
+        params = [record[c] for c in table_columns]
+
+        self.execute(sql, *params)
+        return record["key"]
 
     def fetch(self, key: str, table_name: str) -> dict[str, Any] | None:
-        cur = self._execute(f"SELECT * FROM {table_name} WHERE key = ?", key)
+        cur = self.execute(f"SELECT * FROM {table_name} WHERE key = ?", key)
         row = cur.fetchone()
         if row is None:
             return None
@@ -62,7 +67,7 @@ class SQLiteClient:
 
     def remove(self, key: str, table_name: str) -> bool:
         # Verify table exists and has a 'key' column
-        cols_cur = self._execute(f"PRAGMA table_info({table_name})")
+        cols_cur = self.execute(f"PRAGMA table_info({table_name})")
         columns = [row[1] for row in cols_cur.fetchall()]  # row[1] is column name
         if not columns:
             raise ValueError(f"Table '{table_name}' does not exist.")
@@ -70,10 +75,10 @@ class SQLiteClient:
             raise ValueError(f"Table '{table_name}' must have a 'key' column.")
 
         # Delete and report whether anything was removed
-        cur = self._execute(f"DELETE FROM {table_name} WHERE key = ?", key)
+        cur = self.execute(f"DELETE FROM {table_name} WHERE key = ?", key)
         return cur.rowcount > 0
 
-    def _execute(self, query: str, *params) -> Cursor:
+    def execute(self, query: str, *params) -> Cursor:
         cursor = self._connection.execute(query, params)
         self._connection.commit()
         return cursor
