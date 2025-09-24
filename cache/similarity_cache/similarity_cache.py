@@ -27,7 +27,7 @@ class SimilarityCache(ICache, ABC):
         self._embedder = prompt_embedder
 
     def on_request(self, prompt: str, **kwargs) -> str | None:
-        prompt_key = hashlib.md5(prompt.encode()).hexdigest()
+        prompt_key = self._generate_key(prompt)
         if self.is_hit(prompt_key):
             return self.on_hit(prompt_key)
         self.on_miss(prompt)
@@ -45,3 +45,10 @@ class SimilarityCache(ICache, ABC):
         if response is None:
             raise KeyError(prompt_key)
         return response.response
+
+    def current_size(self) -> int:
+        return self._responses_db.size()
+
+    def _generate_key(self, prompt: str) -> str:
+        embedded_prompt = self._embedder(prompt)
+        return hashlib.md5(str(embedded_prompt).encode()).hexdigest()

@@ -67,16 +67,20 @@ class SQLiteClient:
         return dict(zip(columns, row))
 
     def remove(self, key: str, table_name: str) -> bool:
-        # Verify table exists and has a 'key' column
+        return self.remove_by_column('key', key, table_name)
+
+    def remove_by_column(self, column_name: str, value: Any, table_name: str) -> bool:
+        """Remove all records with `column_name = value` from table `table_name`."""
+        # Verify table exists and has a 'column_name' column
         cols_cur = self.execute(f"PRAGMA table_info({table_name})")
         columns = [row[1] for row in cols_cur.fetchall()]  # row[1] is column name
         if not columns:
             raise ValueError(f"Table '{table_name}' does not exist.")
-        if "key" not in columns:
+        if column_name not in columns:
             raise ValueError(f"Table '{table_name}' must have a 'key' column.")
 
         # Delete and report whether anything was removed
-        cur = self.execute(f"DELETE FROM {table_name} WHERE key = ?", key)
+        cur = self.execute(f"DELETE FROM {table_name} WHERE {column_name} = ?", value)
         return cur.rowcount > 0
 
     def exists(self, key: str, table_name: str) -> bool:
