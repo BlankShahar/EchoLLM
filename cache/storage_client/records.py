@@ -4,14 +4,14 @@ from abc import abstractmethod, ABC
 from pydantic import BaseModel
 
 
-class Artifact(BaseModel, ABC):
+class Record(BaseModel, ABC):
     @abstractmethod
     @property
     def key(self) -> str:
         raise NotImplementedError
 
 
-class ResponseRecord(Artifact):
+class ResponseRecord(Record):
     request_key: str
     response: str
 
@@ -20,7 +20,7 @@ class ResponseRecord(Artifact):
         return hashlib.md5(self.response.encode()).hexdigest()
 
 
-class EmbeddedRequestRecord(Artifact):
+class EmbeddedRequestRecord(Record):
     vector: list[float]
 
     @property
