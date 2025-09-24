@@ -1,5 +1,7 @@
 import math
 
+import numpy as np
+
 
 def euclidean_distance(vector1: list[float], vector2: list[float]) -> float:
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(vector1, vector2)))
@@ -21,3 +23,12 @@ def cosine_distance(vector1: list[float], vector2: list[float]) -> float:
 
     cosine_similarity = dot_product / (norm1 * norm2)
     return 1 - cosine_similarity
+
+
+def normalize(vector: list[float]) -> list[float]:
+    """L2-normalize a vector. If it's all zeros, return as-is."""
+    arr = np.asarray(vector, dtype=np.float32)
+    norm = float(np.linalg.norm(arr))
+    if norm == 0.0:
+        return arr.tolist()
+    return (arr / norm).tolist()

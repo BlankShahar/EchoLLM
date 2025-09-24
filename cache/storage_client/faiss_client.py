@@ -7,10 +7,13 @@ import faiss
 import numpy as np
 from pydantic import BaseModel
 
+from text_similarity import vector_utils
+
 
 class FaissVector(BaseModel):
     id: int
-    vector: list[float]
+    vector: list[float]  # index-space vector (normalized for COSINE; raw otherwise)
+    original_norm: float | None = None  # only set for COSINE; None for L2/IP
 
 
 class DistanceMethod(Enum):
@@ -35,14 +38,13 @@ class FaissClient:
 
         self._load()
 
-    def fetch_k_closest(self, vector: list[float], k: int = 100) -> list[list[float]]:
+    def fetch_nearest_k(self, vector: list[float], k: int = 100) -> list[list[float]]:
         if self.index is None or self.index.ntotal == 0 or k <= 0:
             return []
 
-        # normalize only for cosine
-        q_vec = self._normalize(vector) if self.distance_method == DistanceMethod.COSINE else vector
-        q_arr = np.asarray(q_vec, dtype=np.float32)
-        xq = np.ascontiguousarray([q_arr], dtype=np.float32)
+        # query in index-space (normalize only for cosine)
+        q_vec = vector_utils.normalize(vector) if self.distance_method == DistanceMethod.COSINE else vector
+        xq = np.ascontiguousarray([np.asarray(q_vec, dtype=np.float32)], dtype=np.float32)
 
         k_eff = min(k, self.index.ntotal)
         _, ids = self.index.search(xq, k_eff)  # type: ignore[call-arg]
@@ -52,8 +54,10 @@ class FaissClient:
             if lid == -1:
                 continue
             key = self._id_to_key.get(int(lid))
-            if key:
-                results.append(self._items[key].vector)
+            if not key:
+                continue
+            fv = self._items[key]
+            results.append(self._reconstruct_original_vector(fv))  # return RAW vector for flexible re-ranking
         return results
 
     def save(self, vector: list[float]) -> str:
@@ -62,7 +66,15 @@ class FaissClient:
         if key in self._items:
             return key
 
-        vec = self._normalize(vector) if self.distance_method == DistanceMethod.COSINE else vector
+        if self.distance_method == DistanceMethod.COSINE:
+            # store normalized vector in index; keep original norm to reconstruct raw later
+            arr_raw = np.asarray(vector, dtype=np.float32)
+            norm = float(np.linalg.norm(arr_raw))
+            vec = (arr_raw / norm).astype(np.float32).tolist() if norm != 0.0 else arr_raw.astype(np.float32).tolist()
+            original_norm = norm
+        else:
+            vec = list(np.asarray(vector, dtype=np.float32))
+            original_norm = None
 
         # init index if needed
         if self.index is None:
@@ -74,11 +86,11 @@ class FaissClient:
         # stable int64 id from key
         id_int = int.from_bytes(hashlib.md5(key.encode()).digest()[:8], "big") & ((1 << 63) - 1)
 
-        xb = np.ascontiguousarray([vec], dtype=np.float32)
+        xb = np.ascontiguousarray([np.asarray(vec, dtype=np.float32)], dtype=np.float32)
         xids = np.asarray([id_int], dtype=np.int64)
         self.index.add_with_ids(xb, xids)  # type: ignore[call-arg]
 
-        self._items[key] = FaissVector(id=id_int, vector=vec)
+        self._items[key] = FaissVector(id=id_int, vector=vec, original_norm=original_norm)
         self._id_to_key[id_int] = key
 
         self._persist()
@@ -92,23 +104,20 @@ class FaissClient:
         vid = int(fv.id)
         self._id_to_key.pop(vid, None)
 
-        # Remove from FAISS index if present
         if self.index is not None and self.index.ntotal > 0:
             ids = np.asarray([vid], dtype=np.int64)
             self.index.remove_ids(ids)
 
-        # Persist updated index + metadata
         self._persist()
         return True
 
     @staticmethod
-    def _normalize(vector: list[float]) -> list[float]:
-        """L2-normalize a vector. If it's all zeros, return as-is."""
-        arr = np.asarray(vector, dtype=np.float32)
-        norm = float(np.linalg.norm(arr))
-        if norm == 0.0:
-            return arr.tolist()
-        return (arr / norm).tolist()
+    def _reconstruct_original_vector(stored_vector: FaissVector) -> list[float]:
+        """Convert stored index-space vector back to raw/original space if possible (undo normalization, for Cosine case)."""
+        if stored_vector.original_norm is not None and stored_vector.original_norm != 0.0:
+            arr = np.asarray(stored_vector.vector, dtype=np.float32)
+            return (arr * stored_vector.original_norm).astype(np.float32).tolist()
+        return stored_vector.vector
 
     def _make_index(self, dim: int) -> faiss.Index:
         if self.distance_method in (DistanceMethod.COSINE, DistanceMethod.INNER_PRODUCT):
@@ -137,7 +146,7 @@ class FaissClient:
 
             meta_method = meta.get("distance_method")
 
-        # If metadata has a stored method, ensure it matches the requested one
+        # enforce metric consistency with on-disk metadata
         if meta_method is not None:
             try:
                 stored = DistanceMethod(meta_method) if meta_method in DistanceMethod._value2member_map_ else \
@@ -150,11 +159,11 @@ class FaissClient:
                     f"this client was initialized with {self.distance_method.value}."
                 )
 
-        # if index is missing, but we have metadata, rebuild in-memory and persist
+        # rebuild index from metadata if needed
         if self.index is None and self.dim is not None:
             self.index = self._make_index(int(self.dim))
             if self._items:
-                vecs = [fv.vector for fv in self._items.values()]
+                vecs = [fv.vector for fv in self._items.values()]  # index-space vectors
                 ids = [fv.id for fv in self._items.values()]
                 xb = np.asarray(vecs, dtype=np.float32)
                 xids = np.asarray(ids, dtype=np.int64)
@@ -178,7 +187,7 @@ class FaissClient:
         meta = {
             "dim": int(self.dim) if self.dim is not None else None,
             "items": items_dump,
-            "distance_method": self.distance_method.value,  # persist chosen metric
+            "distance_method": self.distance_method.value,
         }
 
         tmp_meta = self.meta_path.with_suffix(self.meta_path.suffix + ".tmp")
