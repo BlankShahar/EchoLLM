@@ -1,1 +1,1 @@
-from similarity_cache import SimilarityCache
+from .similarity_cache import SimilarityCache

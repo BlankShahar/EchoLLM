@@ -1,3 +1,4 @@
+import logging
 from typing import Callable, Any
 
 from cachetools import LRUCache
@@ -6,6 +7,9 @@ from .similarity_cache import SimilarityCache
 from .similarity_cache.ranking_distance_method import RankingDistanceMethod
 from .storage_client.faiss_client import FaissDistanceMethod
 from .storage_client.records import EmbeddedRequestRecord, ResponseRecord
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger('EchoLLM')
 
 
 class HookedLRUCache(LRUCache):
@@ -39,7 +43,7 @@ class LRUSimilarityCache(SimilarityCache):
         )
         self._lru_cache = HookedLRUCache(max_size)
 
-    def on_miss(self, prompt: str, **kwargs):
+    def on_miss(self, prompt: str, llm_response: str, **kwargs):
         prompt_key = self._generate_key(prompt)
         self._lru_cache[prompt_key] = True
 
@@ -50,10 +54,9 @@ class LRUSimilarityCache(SimilarityCache):
             self._responses_db.remove_by_request(prompt_key)
 
         self._requests_db.save(
-            EmbeddedRequestRecord(key=prompt_key,vector=self._embedder(prompt))
+            EmbeddedRequestRecord(key=prompt_key, vector=self._embedder(prompt))
         )
-        llm_response = self._llm.ask(prompt)
         response_key = self._generate_key(llm_response.response)
         self._responses_db.save(
-            ResponseRecord(key=response_key,request_key=prompt_key, response=llm_response.response)
+            ResponseRecord(key=response_key, request_key=prompt_key, response=llm_response.response)
         )

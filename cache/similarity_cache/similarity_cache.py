@@ -25,13 +25,6 @@ class SimilarityCache(ICache, ABC):
         self._responses_db = ResponsesDB()
         self._embedder = prompt_embedder
 
-    def on_request(self, prompt: str, **kwargs) -> str | None:
-        prompt_key = self._generate_key(prompt)
-        if self.is_hit(prompt_key):
-            return self.on_hit(prompt_key, **kwargs)
-        self.on_miss(prompt, **kwargs)
-        return None
-
     def is_hit(self, prompt: str) -> bool:
         _, distance = self._requests_db.most_similar_request(
             self._embedder(prompt),

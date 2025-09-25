@@ -3,15 +3,17 @@ from pathlib import Path
 from sqlite3 import Connection, Cursor
 from typing import Any
 
+_CWD = Path(__file__).parent
+
 
 class SQLiteClient:
     """
     This SQL client assumes each table has a primary key column named `key`.
     """
 
-    def __init__(self, db_path=Path('resources/responses.db')):
+    def __init__(self, db_path=_CWD / 'resources/responses.db'):
         self._db_file = db_path
-        self._db_file.mkdir(parents=True, exist_ok=True)
+        self._db_file.parent.mkdir(parents=True, exist_ok=True)
         self._connection = self.create_connection()
 
     def create_connection(self) -> Connection:

@@ -26,8 +26,11 @@ class FaissDistanceMethod(Enum):
     L2 = "l2"  # squared Euclidean
 
 
+_CWD = Path(__file__).parent
+
+
 class FaissClient:
-    def __init__(self, distance_method: FaissDistanceMethod, index_path: Path = Path('resources/requests.db')):
+    def __init__(self, distance_method: FaissDistanceMethod, index_path=_CWD / 'resources/requests.db'):
         self.index_path = index_path
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
 
