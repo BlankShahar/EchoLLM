@@ -10,10 +10,14 @@ from pydantic import BaseModel
 from text_similarity import vector_utils
 
 
-class FaissVector(BaseModel):
-    id: int
+class StoredVector(BaseModel):
+    key: str
     vector: list[float]  # index-space vector (normalized for COSINE; raw otherwise)
-    original_norm: float | None = None  # only set for COSINE; None for L2/IP
+
+
+class FaissVector(StoredVector):
+    id: str  # Faiss ID in DB
+    original_norm: float | None = None  # only set for COSINE; None for L2/IP -> used to reconstruct original vector if been normalized
 
 
 class FaissDistanceMethod(Enum):
@@ -38,7 +42,7 @@ class FaissClient:
 
         self._load()
 
-    def fetch_nearest_k(self, vector: list[float], k: int = 100) -> list[list[float]]:
+    def fetch_nearest_k(self, vector: list[float], k: int = 100) -> list[StoredVector]:
         if k <= 0:
             raise ValueError('k must be greater than 0!')
         if self.index is None or self.index.ntotal == 0:
@@ -51,20 +55,19 @@ class FaissClient:
         k_eff = min(k, self.index.ntotal)
         _, ids = self.index.search(xq, k_eff)  # type: ignore[call-arg]
 
-        results: list[list[float]] = []
+        results: list[StoredVector] = []
         for lid in ids[0]:
             if lid == -1:
                 continue
             key = self._id_to_key.get(int(lid))
             if not key:
                 continue
-            fv = self._items[key]
-            results.append(self._reconstruct_original_vector(fv))  # return RAW vector for flexible re-ranking
+            faiss_vector = self._items[key]
+            original_vector = StoredVector(key=key, vector=self._reconstruct_original_vector(faiss_vector))
+            results.append(original_vector)  # return original vector for flexible re-ranking
         return results
 
-    def save(self, vector: list[float]) -> str:
-        # key based on original (pre-normalization) vector for idempotency
-        key = hashlib.md5(str(vector).encode()).hexdigest()
+    def save(self, vector: list[float], key: str) -> str:
         if key in self._items:
             return key
 
@@ -92,7 +95,7 @@ class FaissClient:
         xids = np.asarray([id_int], dtype=np.int64)
         self.index.add_with_ids(xb, xids)  # type: ignore[call-arg]
 
-        self._items[key] = FaissVector(id=id_int, vector=vec, original_norm=original_norm)
+        self._items[key] = FaissVector(key=key, id=id_int, vector=vec, original_norm=original_norm)
         self._id_to_key[id_int] = key
 
         self._persist()

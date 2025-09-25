@@ -15,9 +15,18 @@ class ResponsesDB:
             ');'
         )
 
-    def fetch(self, key: str) -> ResponseRecord | None:
+    def fetch(self, key: str) -> ResponseRecord:
         record = self._sqlite_client.fetch(key, self._TABLE)
-        return ResponseRecord.model_validate(record) if record is not None else None
+        if not record:
+            raise KeyError(f'Response with key=`{key}` was not found!')
+        return ResponseRecord.model_validate(record)
+
+    def fetch_by_request(self, request_key: str) -> ResponseRecord:
+        records = self._sqlite_client.fetch_by_column('request_key', request_key, self._TABLE)
+        if not records:
+            raise KeyError(f'Key {request_key} not found')
+        record = records[0]
+        return ResponseRecord.model_validate(record)
 
     def save(self, response: ResponseRecord) -> str:
         key = self._sqlite_client.save(response.model_dump(), self._TABLE)

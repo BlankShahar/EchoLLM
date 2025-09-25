@@ -1,6 +1,8 @@
+from functools import lru_cache
+
 from text_similarity import vector_utils
 from ..ranking_distance_method import RankingDistanceMethod
-from ...storage_client.faiss_client import FaissDistanceMethod, FaissClient
+from ...storage_client.faiss_client import FaissClient, FaissDistanceMethod
 from ...storage_client.records import EmbeddedRequestRecord
 
 
@@ -25,20 +27,21 @@ class RequestsDB:
         self._faiss_client = FaissClient(db_distance_method)
         self._ranking_distance_method = ranking_distance_method
 
-    def most_similar_request(self, request: EmbeddedRequestRecord, k=100) -> tuple[EmbeddedRequestRecord, float]:
+    @lru_cache
+    def most_similar_request(self, embedded_request: list[float], k=100) -> tuple[EmbeddedRequestRecord, float]:
         """
-        Returns the most similar question in the DB which were previously asked.
+        Returns the most similar (embedded, i.e. vectorized) question in the DB which were previously asked.
         """
-        candidates = self._faiss_client.fetch_nearest_k(request.vector, k)
+        candidates = self._faiss_client.fetch_nearest_k(embedded_request, k)
         distance = self._RANKING_METHODS_MAP[self._ranking_distance_method]
-        best_vector, best_distance = min(
-            [(vector, distance(request.vector, vector)) for vector in candidates],
+        best_candidate, best_distance = min(
+            [(candidate, distance(embedded_request, candidate.vector)) for candidate in candidates],
             key=lambda item: item[1],
         )
-        return EmbeddedRequestRecord(vector=best_vector), best_distance
+        return EmbeddedRequestRecord(key=best_candidate.key, vector=best_candidate.vector), best_distance
 
     def save(self, request: EmbeddedRequestRecord) -> str:
-        key = self._faiss_client.save(request.vector)
+        key = self._faiss_client.save(request.vector, request.key)
         assert request.key == key
         return key
 

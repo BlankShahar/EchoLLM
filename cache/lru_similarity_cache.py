@@ -39,17 +39,21 @@ class LRUSimilarityCache(SimilarityCache):
         )
         self._lru_cache = HookedLRUCache(max_size)
 
-    def on_miss(self, prompt: str, **kwargs) -> None:
-        prompt_key = self._generate_key(
-            prompt)  # TODO: fix the generate key bamboozle into a single one source of truth
+    def on_miss(self, prompt: str, **kwargs):
+        prompt_key = self._generate_key(prompt)
         self._lru_cache[prompt_key] = True
 
-        # if the last insert generated an eviction
+        # if the last insert caused an eviction due to reaching maximum capacity
         if len(self._lru_cache) == self._max_size and self._lru_cache.last_evicted is not None:
             prompt_key, _ = self._lru_cache.last_evicted
             self._requests_db.remove(prompt_key)
             self._responses_db.remove_by_request(prompt_key)
 
-        self._requests_db.save(EmbeddedRequestRecord(vector=self._embedder(prompt)))
+        self._requests_db.save(
+            EmbeddedRequestRecord(key=prompt_key,vector=self._embedder(prompt))
+        )
         llm_response = self._llm.ask(prompt)
-        self._responses_db.save(ResponseRecord(request_key=prompt_key, response=llm_response.response))
+        response_key = self._generate_key(llm_response.response)
+        self._responses_db.save(
+            ResponseRecord(key=response_key,request_key=prompt_key, response=llm_response.response)
+        )

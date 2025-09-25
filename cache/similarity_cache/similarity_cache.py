@@ -6,7 +6,6 @@ from cache import ICache
 from .db_handlers import RequestsDB, ResponsesDB
 from .ranking_distance_method import RankingDistanceMethod
 from ..storage_client.faiss_client import FaissDistanceMethod
-from ..storage_client.records import EmbeddedRequestRecord
 
 
 class SimilarityCache(ICache, ABC):
@@ -29,26 +28,30 @@ class SimilarityCache(ICache, ABC):
     def on_request(self, prompt: str, **kwargs) -> str | None:
         prompt_key = self._generate_key(prompt)
         if self.is_hit(prompt_key):
-            return self.on_hit(prompt_key)
-        self.on_miss(prompt)
+            return self.on_hit(prompt_key, **kwargs)
+        self.on_miss(prompt, **kwargs)
         return None
 
     def is_hit(self, prompt: str) -> bool:
         _, distance = self._requests_db.most_similar_request(
-            EmbeddedRequestRecord(vector=self._embedder(prompt)),
+            self._embedder(prompt),
             self._candidates_number
         )
         return distance <= self._hit_distance_threshold
 
-    def on_hit(self, prompt_key: str, **kwargs) -> str:
-        response = self._responses_db.fetch(prompt_key)
+    def on_hit(self, prompt: str, **kwargs) -> str:
+        hit_request, _ = self._requests_db.most_similar_request(
+            self._embedder(prompt),
+            self._candidates_number
+        )
+        response = self._responses_db.fetch_by_request(hit_request.key)
         if response is None:
-            raise KeyError(prompt_key)
+            raise KeyError(f'Response with request_key=`{hit_request.key}` was not found!')
         return response.response
 
     def current_size(self) -> int:
         return self._responses_db.size()
 
-    def _generate_key(self, prompt: str) -> str:
-        embedded_prompt = self._embedder(prompt)
-        return hashlib.md5(str(embedded_prompt).encode()).hexdigest()
+    @staticmethod
+    def _generate_key(text: str) -> str:
+        return hashlib.md5(text.encode()).hexdigest()

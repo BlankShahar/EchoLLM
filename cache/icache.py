@@ -1,4 +1,5 @@
 from abc import abstractmethod, ABC
+from typing import Any
 
 from llm.llm import LLM
 
@@ -9,19 +10,20 @@ class ICache(ABC):
         self._llm = llm
 
     @abstractmethod
-    def on_request(self, item: str, **kwargs) -> None:
+    def on_request(self, request: Any, **kwargs) -> Any | None:
+        """Returns cached item in case of hit, None otherwise."""
         raise NotImplementedError
 
     @abstractmethod
-    def is_hit(self, item_key: str) -> bool:
+    def is_hit(self, request: Any) -> bool:
         raise NotImplementedError
 
     @abstractmethod
-    def on_hit(self, item_key: str, **kwargs) -> None:
+    def on_hit(self, request: Any, **kwargs) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def on_miss(self, item: str, **kwargs) -> None:
+    def on_miss(self, request: Any, **kwargs) -> None:
         raise NotImplementedError
 
     @property

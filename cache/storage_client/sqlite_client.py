@@ -57,14 +57,37 @@ class SQLiteClient:
         self.execute(sql, *params)
         return record["key"]
 
-    def fetch(self, key: str, table_name: str) -> dict[str, Any] | None:
+    def fetch(self, key: str, table_name: str) -> dict[str, Any]:
         cur = self.execute(f"SELECT * FROM {table_name} WHERE key = ?", key)
         row = cur.fetchone()
         if row is None:
-            return None
+            return {}
 
         columns = [d[0] for d in cur.description]
         return dict(zip(columns, row))
+
+    def fetch_by_column(self, column_name: str, value: Any, table_name: str) -> list[dict[str, Any]]:
+        """Return all records with `column_name = value` from table `table_name`."""
+        # Validate table and column
+        cols_cur = self.execute(f"PRAGMA table_info({table_name})")
+        table_columns = [row[1] for row in cols_cur.fetchall()]
+        if not table_columns:
+            raise ValueError(f"Table '{table_name}' does not exist.")
+        if column_name not in table_columns:
+            raise ValueError(f"Column '{column_name}' does not exist in table '{table_name}'.")
+
+        # Build and run the query
+        if value is None:
+            cur = self.execute(f"SELECT * FROM {table_name} WHERE {column_name} IS NULL")
+        else:
+            cur = self.execute(f"SELECT * FROM {table_name} WHERE {column_name} = ?", value)
+
+        rows = cur.fetchall()
+        if not rows:
+            return []
+
+        col_names = [d[0] for d in cur.description]
+        return [dict(zip(col_names, row)) for row in rows]
 
     def remove(self, key: str, table_name: str) -> bool:
         return self.remove_by_column('key', key, table_name)
