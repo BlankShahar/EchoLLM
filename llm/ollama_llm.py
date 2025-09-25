@@ -3,7 +3,7 @@ from enum import StrEnum
 
 import ollama
 
-from .llm import LLM, LLMResponse
+from .illm import ILLM, LLMResponse
 
 
 class OllamaModel(StrEnum):
@@ -14,7 +14,7 @@ class OllamaModel(StrEnum):
     PHI3 = "phi3"
 
 
-class Ollama(LLM):
+class Ollama(ILLM):
     def __init__(self, model: OllamaModel, host: str | None, options: dict | None = None):
         self._model = model
         self._client = ollama.Client(host=host)

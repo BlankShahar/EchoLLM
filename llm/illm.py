@@ -8,7 +8,7 @@ class LLMResponse(BaseModel):
     time: float = Field(description="Time taken for LLM to respond, in milliseconds")
 
 
-class LLM(ABC):
+class ILLM(ABC):
     @abstractmethod
     def ask(self, prompt: str) -> LLMResponse:
         raise NotImplementedError

@@ -1,11 +1,11 @@
 from abc import abstractmethod, ABC
 from typing import Any
 
-from llm.llm import LLM
+from llm.illm import ILLM
 
 
 class ICache(ABC):
-    def __init__(self, max_size: int, llm: LLM):
+    def __init__(self, max_size: int, llm: ILLM):
         self._max_size = max_size
         self._llm = llm
 
