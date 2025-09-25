@@ -26,10 +26,13 @@ class SimilarityCache(ICache, ABC):
         self._embedder = prompt_embedder
 
     def is_hit(self, prompt: str) -> bool:
-        _, distance = self._requests_db.most_similar_request(
+        most_similar_request = self._requests_db.most_similar_request(
             self._embedder(prompt),
             self._candidates_number
         )
+        if most_similar_request is None:
+            return False
+        _, distance = most_similar_request
         return distance <= self._hit_distance_threshold
 
     def on_hit(self, prompt: str, **kwargs) -> str:

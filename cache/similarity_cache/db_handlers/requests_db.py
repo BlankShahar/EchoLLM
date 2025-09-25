@@ -1,6 +1,5 @@
-from functools import lru_cache
-
 from text_similarity import vector_utils
+from .hashable_lru_cache import hashable_lru_cache
 from ..ranking_distance_method import RankingDistanceMethod
 from ...storage_client.faiss_client import FaissClient, FaissDistanceMethod
 from ...storage_client.records import EmbeddedRequestRecord
@@ -27,15 +26,24 @@ class RequestsDB:
         self._faiss_client = FaissClient(db_distance_method)
         self._ranking_distance_method = ranking_distance_method
 
-    @lru_cache
-    def most_similar_request(self, embedded_request: list[float], k=100) -> tuple[EmbeddedRequestRecord, float]:
+    @hashable_lru_cache
+    def most_similar_request(self, embedded_request: list[float], k=100) -> tuple[EmbeddedRequestRecord, float] | None:
         """
         Returns the most similar (embedded, i.e. vectorized) question in the DB which were previously asked.
+            None indicates that no previous questions were asked before.
         """
         candidates = self._faiss_client.fetch_nearest_k(embedded_request, k)
+        if not candidates:
+            return None
         distance = self._RANKING_METHODS_MAP[self._ranking_distance_method]
         best_candidate, best_distance = min(
-            [(candidate, distance(embedded_request, candidate.vector)) for candidate in candidates],
+            [
+                [
+                    candidate,
+                    distance(tuple(embedded_request), tuple(candidate.vector))
+                ]
+                for candidate in candidates
+            ],
             key=lambda item: item[1],
         )
         return EmbeddedRequestRecord(key=best_candidate.key, vector=best_candidate.vector), best_distance
@@ -49,5 +57,5 @@ class RequestsDB:
         return self._faiss_client.remove(key)
 
     def size(self) -> int:
-        """Retruns the amount of records in the DB."""
+        """Returns the amount of records in the DB."""
         return self._faiss_client.size()

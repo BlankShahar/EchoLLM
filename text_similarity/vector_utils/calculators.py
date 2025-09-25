@@ -1,21 +1,22 @@
 import math
 from functools import lru_cache
+from typing import Iterable
 
 import numpy as np
 
 
 @lru_cache
-def euclidean_distance(vector1: list[float], vector2: list[float]) -> float:
+def euclidean_distance(vector1: Iterable[float], vector2: Iterable[float]) -> float:
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(vector1, vector2)))
 
 
 @lru_cache
-def manhattan_distance(vector1: list[float], vector2: list[float]) -> float:
+def manhattan_distance(vector1: Iterable[float], vector2: Iterable[float]) -> float:
     return sum(abs(a - b) for a, b in zip(vector1, vector2))
 
 
 @lru_cache
-def cosine_distance(vector1: list[float], vector2: list[float]) -> float:
+def cosine_distance(vector1: Iterable[float], vector2: Iterable[float]) -> float:
     dot_product = sum(a * b for a, b in zip(vector1, vector2))
     norm1 = math.sqrt(sum(a * a for a in vector1))
     norm2 = math.sqrt(sum(b * b for b in vector2))
@@ -30,7 +31,7 @@ def cosine_distance(vector1: list[float], vector2: list[float]) -> float:
 
 
 @lru_cache
-def normalize(vector: list[float]) -> list[float]:
+def normalize(vector: Iterable[float]) -> Iterable[float]:
     """L2-normalize a vector. If it's all zeros, return as-is."""
     arr = np.asarray(vector, dtype=np.float32)
     norm = float(np.linalg.norm(arr))
