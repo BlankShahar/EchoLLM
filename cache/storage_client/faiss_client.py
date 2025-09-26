@@ -16,7 +16,7 @@ class StoredVector(BaseModel):
 
 
 class FaissVector(StoredVector):
-    id: str  # Faiss ID in DB
+    id: int  # Faiss ID in DB
     original_norm: float | None = None  # only set for COSINE; None for L2/IP -> used to reconstruct original vector if been normalized
 
 
@@ -42,6 +42,10 @@ class FaissClient:
         self.meta_path = self.index_path.with_suffix('.meta.json')
         self._items: dict[str, FaissVector] = {}  # key -> FaissVector
         self._id_to_key: dict[int, str] = {}  # id -> key
+
+        # ensure dirs exist
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        self.meta_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._load()
 
@@ -183,10 +187,6 @@ class FaissClient:
                     faiss.write_index(self.index, self.index_path.__fspath__())
 
     def _persist(self) -> None:
-        # ensure dirs exist
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        self.meta_path.parent.mkdir(parents=True, exist_ok=True)
-
         # persist index (temp then replace)
         if self.index is not None:
             tmp_index = self.index_path.with_suffix(self.index_path.suffix + ".tmp")
