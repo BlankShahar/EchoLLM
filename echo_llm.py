@@ -3,7 +3,7 @@ import logging
 from cache import ICache
 from llm import ILLM
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('EchoLLM')
 
 
@@ -14,10 +14,11 @@ class EchoLLM:
 
     def ask(self, prompt: str) -> str:
         if self._cache.is_hit(prompt):
-            logger.debug('Cache Hit', extra={'prompt': prompt})
+            logger.info('Cache Hit', extra={'prompt': prompt})
             return self._cache.on_hit(prompt)
         else:
-            logger.debug('Cache Miss', extra={'prompt': prompt})
+            logger.info('Cache Miss', extra={'prompt': prompt})
             llm_response = self._llm.ask(prompt)
-            logger.debug(f'LLM response took {llm_response.time:.2f}ms')
+            logger.info(f'LLM response took {llm_response.time:.2f}ms')
+            self._cache.on_miss(prompt, llm_response.response)
             return llm_response.response
