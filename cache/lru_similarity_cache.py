@@ -8,7 +8,7 @@ from .similarity_cache.ranking_distance_method import RankingDistanceMethod
 from .storage_client.faiss_client import FaissDistanceMethod
 from .storage_client.records import EmbeddedRequestRecord, ResponseRecord
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('EchoLLM')
 
 
@@ -56,7 +56,7 @@ class LRUSimilarityCache(SimilarityCache):
         self._requests_db.save(
             EmbeddedRequestRecord(key=prompt_key, vector=self._embedder(prompt))
         )
-        response_key = self._generate_key(llm_response.response)
+        response_key = self._generate_key(llm_response)
         self._responses_db.save(
-            ResponseRecord(key=response_key, request_key=prompt_key, response=llm_response.response)
+            ResponseRecord(key=response_key, request_key=prompt_key, response=llm_response)
         )
