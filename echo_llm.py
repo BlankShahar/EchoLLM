@@ -19,5 +19,5 @@ class EchoLLM:
         else:
             logger.debug('Cache Miss', extra={'prompt': prompt})
             llm_response = self._llm.ask(prompt)
-            logger.debug(f'LLM response took {llm_response:.2f}ms')
+            logger.debug(f'LLM response took {llm_response.time:.2f}ms')
             return llm_response.response
