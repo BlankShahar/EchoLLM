@@ -62,7 +62,7 @@ pip install -r requirements.txt
 
 ---
 
-## ⚡ Quickstart
+## ⚡ Toy Code Example
 
 
 ### Smart Similarity Cache
@@ -72,7 +72,7 @@ from echo_llm import EchoLLM
 
 echo_llm = EchoLLM(cache=..., llm=...)
 
-# First call: hits the API
+# First call: misses the cache, hits the LLM
 res1 = echo_llm.ask("What is an echo?")
 print(res1)
 
