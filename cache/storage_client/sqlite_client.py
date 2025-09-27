@@ -11,7 +11,7 @@ class SQLiteClient:
     This SQL client assumes each table has a primary key column named `key`.
     """
 
-    def __init__(self, db_path=_CWD / 'resources/responses.db'):
+    def __init__(self, db_path=_CWD / 'resources/responses.sql'):
         self._db_file = db_path
         self._db_file.parent.mkdir(parents=True, exist_ok=True)
         self._connection = self.create_connection()

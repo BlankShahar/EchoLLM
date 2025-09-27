@@ -164,8 +164,8 @@ class FaissClient:
         # enforce metric consistency with on-disk metadata
         if meta_method is not None:
             try:
-                stored = FaissDistanceMethod(meta_method) if meta_method in FaissDistanceMethod._value2member_map_ else \
-                    FaissDistanceMethod[meta_method]
+                stored = FaissDistanceMethod(meta_method) if meta_method in FaissDistanceMethod._value2member_map_ \
+                    else FaissDistanceMethod[meta_method]
             except Exception:
                 stored = None
             if stored is not None and stored != self.distance_method:
