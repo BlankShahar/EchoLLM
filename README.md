@@ -152,7 +152,7 @@ TBD.
 
 ## 💡 Inspiration
 
-EchoLLM was inspired by prior work on caching for LLMs, such as [CacheGPT](https://github.com/Iterative/cachegpt), which demonstrated the value of avoiding redundant API calls by reusing previous responses.  
+EchoLLM was inspired by prior work on caching for LLMs, such as [GPTCache](https://github.com/zilliztech/GPTCache), which demonstrated the value of avoiding redundant API calls by reusing previous responses.  
 
 Our name **EchoLLM** comes from this very idea:  
 we integrate a **caching framework as the frontend**, placed before the LLM backend.  
