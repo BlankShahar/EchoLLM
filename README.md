@@ -70,7 +70,7 @@ pip install -r requirements.txt
 ```python
 from echo_llm import EchoLLM
 
-echo_llm = EchoLLM(cache=..., llm=...)
+echo_llm = EchoLLM(cache=SimilarityCache(...), llm=...)
 
 # First call: misses the cache, hits the LLM
 res1 = echo_llm.ask("What is an echo?")
@@ -81,7 +81,31 @@ res2 = echo_llm.ask("What’s an echo?")
 print(res2)
 ```
 Check out the full example usage in [example_usage.py](./_example.py) module.
-
+Here's an output example:
+```shell
+>>> ask('Write me a short script of calculator in python')
+INFO:EchoLLM:Cache Miss
+INFO:EchoLLM:LLM response took 10156.13ms
+INFO:httpx:HTTP Request: POST http://localhost:11434/api/pull "HTTP/1.1 200 OK"
+python
+def calculator():
+  """A simple calculator in Python."""
+...
+-------------
+>>> ask('Make a simple calculator in python')
+INFO:EchoLLM:Cache Hit
+python
+def calculator():
+  """A simple calculator in Python."""
+...
+-------------
+>>> ask('Hi')
+INFO:EchoLLM:Cache Miss
+INFO:httpx:HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+INFO:EchoLLM:LLM response took 8586.60ms
+Hey there! How’s your day going so far? 😊 
+...
+```
 ---
 
 ## 📂 Project Structure
