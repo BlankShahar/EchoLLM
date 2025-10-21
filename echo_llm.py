@@ -20,5 +20,5 @@ class EchoLLM:
             logger.info('Cache Miss', extra={'prompt': prompt})
             llm_response = self._llm.ask(prompt)
             logger.info(f'LLM response took {llm_response.time:.2f}ms')
-            self._cache.on_miss(prompt, llm_response.response)
+            self._cache.on_miss(prompt, llm_response.response, llm_response_time=llm_response.time)
             return llm_response.response

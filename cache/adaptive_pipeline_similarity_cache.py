@@ -23,6 +23,10 @@ class HookedAdaptivePipelineCache(AdaptivePipelineCache):
         return k, v
 
 
+class MissingArgumentError(Exception):
+    pass
+
+
 class AdaptivePipelineSimilarityCache(SimilarityCache):
     def __init__(
             self,
@@ -44,8 +48,16 @@ class AdaptivePipelineSimilarityCache(SimilarityCache):
         self._ap_cache = HookedAdaptivePipelineCache(max_size)
 
     def on_miss(self, prompt: str, llm_response: str, **kwargs):
+        """
+        This function expects getting a kwarg argument named "llm_response_time", for the time the LLM took to answer.
+            Otherwise, it will raise an exception.
+        """
+        llm_response_time = kwargs.get('llm_response_time')
+        if llm_response_time is None:
+            raise MissingArgumentError('Adaptive Pipeline policy requires "llm_response_time" argument!')
+
         prompt_key = self._generate_int_key(prompt)
-        self._ap_cache[prompt_key] = (1.0, 1)
+        self._ap_cache[prompt_key] = (llm_response_time, len(llm_response))
 
         # if the last insert caused an eviction due to reaching maximum capacity
         if len(self._ap_cache) == self._max_size and self._ap_cache.last_evicted is not None:
