@@ -51,3 +51,7 @@ class SimilarityCache(ICache, ABC):
     @staticmethod
     def _generate_key(text: str) -> str:
         return hashlib.md5(text.encode()).hexdigest()
+
+    @staticmethod
+    def _generate_int_key(text: str) -> int:
+        return int(hashlib.md5(text.encode()).digest(), 16)
