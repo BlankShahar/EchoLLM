@@ -42,7 +42,7 @@ EchoLLM is built around **clean modular components**:
 
 ![System UML Diagram](EchoLLM-Design.png)
 
-- **EchoLLM**: the entrypoint (your API).
+- **EchoLLM**: the framework's entrypoint.
 - **LLM Backend**: pluggable provider (OpenAI, local models, etc.).
 - **Cache Manager**: integrates *smart similarity* for reusing close-enough results.
 - **Storage Client**: handles persistence (databases, file system, or pluggable storage backends).
