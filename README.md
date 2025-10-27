@@ -134,6 +134,16 @@ EchoLLM/
 
 ---
 
+### 🧠 Supported Cache Policies
+
+| Policy | Notes |
+|-------|-------|
+| 🔹 **LRU** | Standard least-recently-used eviction |
+| 🔸 **LFU** | Tracks usage frequency to guide eviction |
+| 🔹 **FIFO** | First-in-first-out queue behavior |
+| 🔸 **RR** | Random replacement eviction |
+| 🚀 **Adaptive Pipeline Cache** | [External implementation](https://github.com/NadavKeren/python-adaptive-pipeline-cache) – adaptive & workload-aware |
+
 ## 🤝 Contributing
 
 PRs welcome!
