@@ -1,5 +1,6 @@
 import time
 from enum import StrEnum
+from typing import Any
 
 import ollama
 
@@ -28,14 +29,18 @@ class OllamaModel(StrEnum):
     DEEPSEEK_V3_1_671B = "deepseek-v3.1:671b"
 
 
+class OllamaResponse(LLMResponse):
+    pass
+
+
 class Ollama(ILLM):
-    def __init__(self, model: OllamaModel, host: str | None, options: dict | None = None):
+    def __init__(self, model: OllamaModel, host: str, options: dict[str, Any] | None = None):
         self._client = ollama.Client(host=host)
         self._client.pull(model)
         self._model = model
         self._options = options or {}
 
-    def ask(self, prompt: str) -> LLMResponse:
+    def ask(self, prompt: str) -> OllamaResponse:
         start_time = time.perf_counter()
         result = self._client.generate(
             model=self._model,
@@ -45,4 +50,4 @@ class Ollama(ILLM):
         )
         end_time = time.perf_counter()
         elapsed_ms = (end_time - start_time) * 1000
-        return LLMResponse(response=result.response, time=elapsed_ms)
+        return OllamaResponse(response=result.response, time=elapsed_ms)
