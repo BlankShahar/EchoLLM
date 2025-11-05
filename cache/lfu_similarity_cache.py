@@ -39,7 +39,8 @@ class LFUSimilarityCache(SimilarityCache):
             candidates_number,
             ranking_distance_method,
             db_distance_method,
-            prompt_embedder
+            prompt_embedder,
+            'Similarity LFU'
         )
         self._lfu_cache = HookedLFUCache(max_size)
 

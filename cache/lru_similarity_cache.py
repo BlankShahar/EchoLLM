@@ -39,7 +39,8 @@ class LRUSimilarityCache(SimilarityCache):
             candidates_number,
             ranking_distance_method,
             db_distance_method,
-            prompt_embedder
+            prompt_embedder,
+            'Similarity LRU'
         )
         self._lru_cache = HookedLRUCache(max_size)
 

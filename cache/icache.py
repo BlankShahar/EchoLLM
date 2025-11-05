@@ -3,8 +3,9 @@ from typing import Any
 
 
 class ICache(ABC):
-    def __init__(self, max_size: int):
+    def __init__(self, max_size: int, policy_name: str):
         self._max_size = max_size
+        self.policy_name = policy_name
 
     @abstractmethod
     def is_hit(self, request: Any) -> bool:

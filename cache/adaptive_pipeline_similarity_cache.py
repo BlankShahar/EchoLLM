@@ -43,7 +43,8 @@ class AdaptivePipelineSimilarityCache(SimilarityCache):
             candidates_number,
             ranking_distance_method,
             db_distance_method,
-            prompt_embedder
+            prompt_embedder,
+            'Similarity Adaptive-Pipeline'
         )
         self._ap_cache = HookedAdaptivePipelineCache(max_size)
 

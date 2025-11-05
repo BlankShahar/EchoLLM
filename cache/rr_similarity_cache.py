@@ -39,7 +39,8 @@ class RRSimilarityCache(SimilarityCache):
             candidates_number,
             ranking_distance_method,
             db_distance_method,
-            prompt_embedder
+            prompt_embedder,
+            'Similarity RR'
         )
         self._rr_cache = HookedRRCache(max_size)
 

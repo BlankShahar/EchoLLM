@@ -7,7 +7,7 @@ from llm.ollama_llm import OllamaModel
 from text_similarity import text_embedder
 
 
-def run_example():
+def run_cache_example():
     echo_llm = EchoLLM(
         cache=LRUSimilarityCache(
             max_size=10,
@@ -42,4 +42,4 @@ def run_example():
 
 
 if __name__ == '__main__':
-    run_example()
+    run_cache_example()

@@ -39,7 +39,8 @@ class FIFOSimilarityCache(SimilarityCache):
             candidates_number,
             ranking_distance_method,
             db_distance_method,
-            prompt_embedder
+            prompt_embedder,
+            'Similarity FIFO'
         )
         self._fifo_cache = HookedFIFOCache(max_size)
 

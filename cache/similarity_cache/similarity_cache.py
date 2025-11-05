@@ -16,9 +16,10 @@ class SimilarityCache(ICache, ABC):
             candidates_number: int,
             ranking_distance_method: RankingDistanceMethod,
             db_distance_method: FaissDistanceMethod,
-            prompt_embedder: Callable[[str], list[float]]
+            prompt_embedder: Callable[[str], list[float]],
+            policy_name: str
     ):
-        super().__init__(max_size)
+        super().__init__(max_size, policy_name)
         self._hit_distance_threshold = hit_distance_threshold
         self._candidates_number = candidates_number
         self._requests_db = RequestsDB(ranking_distance_method, db_distance_method)
