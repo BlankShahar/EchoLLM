@@ -4,7 +4,7 @@ from typing import Any
 
 import ollama
 
-from .illm import ILLM, LLMResponse
+from .illm import ILLM, LLMResponse, StreamedLLMResponse
 
 
 class OllamaModel(StrEnum):
@@ -33,6 +33,10 @@ class OllamaResponse(LLMResponse):
     pass
 
 
+class StreamedOllamaResponse(StreamedLLMResponse):
+    pass
+
+
 class Ollama(ILLM):
     def __init__(self, model: OllamaModel, host: str, options: dict[str, Any] | None = None):
         self._client = ollama.Client(host=host)
@@ -40,14 +44,35 @@ class Ollama(ILLM):
         self._model = model
         self._options = options or {}
 
-    def ask(self, prompt: str) -> OllamaResponse:
+    def ask(self, prompt: str, think: bool = False) -> OllamaResponse:
         start_time = time.perf_counter()
         result = self._client.generate(
             model=self._model,
             prompt=prompt,
             options=self._options,
+            think=think,
             stream=False,
         )
         end_time = time.perf_counter()
         elapsed_ms = (end_time - start_time) * 1000
-        return OllamaResponse(response=result.response, time=elapsed_ms)
+        return OllamaResponse(response=result.response, latency=elapsed_ms)
+
+    def stream_ask(self, prompt: str, think: bool = False) -> StreamedLLMResponse:
+        start_time = time.perf_counter()
+        result = self._client.generate(
+            model=self._model,
+            prompt=prompt,
+            options=self._options,
+            think=think,
+            stream=True,
+        )
+        full_response = next(result).response  # get the first token
+        first_token_time = time.perf_counter()
+        full_response += ''.join([token.response for token in result])  # get the rest of the tokens
+        end_time = time.perf_counter()
+
+        return StreamedLLMResponse(
+            response=full_response,
+            latency=(end_time - start_time) * 1000,
+            delay=(first_token_time - start_time) * 1000,
+        )

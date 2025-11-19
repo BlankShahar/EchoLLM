@@ -39,7 +39,7 @@ class ChatGPT(ILLM):
         elapsed_ms = (end_time - start_time) * 1000
         return ChatGPTResponse(
             response=response.choices[0].message.content,
-            time=elapsed_ms,
+            latency=elapsed_ms,
             prompt_tokens=response.usage.prompt_tokens,
             response_tokens=response.usage.completion_tokens,
         )
