@@ -18,8 +18,8 @@ class EchoLLM:
         else:
             logger.info(f'Initiated Cache - `{self._cache.policy_name}`')
 
-    def ask(self, prompt: str) -> str:
-        if self._cache is None:
+    def ask(self, prompt: str, force_llm: bool = True) -> str:
+        if self._cache is None or force_llm:
             return self._ask_llm(prompt).response
 
         if self._cache.is_hit(prompt):
