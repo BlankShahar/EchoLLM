@@ -68,7 +68,7 @@ pip install -r requirements.txt
 ### Smart Similarity Cache
 
 ```python
-from echo_llm import EchoLLM
+from echollm import EchoLLM
 
 echo_llm = EchoLLM(cache=SimilarityCache(...), llm=...)
 

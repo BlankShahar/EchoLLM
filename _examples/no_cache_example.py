@@ -1,4 +1,4 @@
-from echo_llm import EchoLLM
+from echollm.echollm import EchoLLM
 from llm import Ollama
 from llm.ollama_llm import OllamaModel
 

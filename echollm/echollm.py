@@ -3,6 +3,7 @@ from typing import Optional
 
 from cache import ICache
 from llm import ILLM, LLMResponse
+from llm.illm import StreamedLLMResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('EchoLLM')
@@ -18,7 +19,7 @@ class EchoLLM:
         else:
             logger.info(f'Initiated Cache - `{self._cache.policy_name}`')
 
-    def ask(self, prompt: str, force_llm: bool = True) -> str:
+    def ask(self, prompt: str, force_llm: bool = False) -> str:
         if self._cache is None or force_llm:
             return self._ask_llm(prompt).response
 
@@ -28,7 +29,7 @@ class EchoLLM:
         else:
             logger.info('Cache Miss', extra={'prompt': prompt})
             llm_response = self._ask_llm(prompt)
-            self._cache.on_miss(prompt, llm_response.response, llm_response_time=llm_response.latency)
+            self._cache.on_miss(prompt, llm_response.response, llm_latency=llm_response.latency)
             return llm_response.response
 
     def _ask_llm(self, prompt: str) -> LLMResponse:
@@ -36,20 +37,26 @@ class EchoLLM:
         logger.info(f'LLM response took {llm_response.latency:.2f}ms')
         return llm_response
 
-    def stream_ask(self, prompt: str, force_llm: bool = True) -> str:
+    def stream_ask(self, prompt: str, force_llm: bool = False) -> str:
         if self._cache is None or force_llm:
-            return self._ask_llm(prompt).response
+            return self._stream_ask_llm(prompt).response
 
         if self._cache.is_hit(prompt):
             logger.info('Cache Hit', extra={'prompt': prompt})
             return self._cache.on_hit(prompt)
         else:
             logger.info('Cache Miss', extra={'prompt': prompt})
-            llm_response = self._ask_llm(prompt)
-            self._cache.on_miss(prompt, llm_response.response, llm_response_time=llm_response.latency)
+            llm_response = self._stream_ask_llm(prompt)
+            self._cache.on_miss(
+                prompt,
+                llm_response.response,
+                llm_delay=llm_response.delay,
+                llm_latency=llm_response.latency
+            )
             return llm_response.response
 
-    def _stream_ask_llm(self, prompt: str) -> LLMResponse:
-        llm_response = self._llm.ask(prompt)
-        logger.info(f'LLM response took {llm_response.latency:.2f}ms')
+    def _stream_ask_llm(self, prompt: str) -> StreamedLLMResponse:
+        llm_response = self._llm.stream_ask(prompt)
+        logger.info(f'LLM first token response took {llm_response.delay:.2f}ms')
+        logger.info(f'LLM full response took {llm_response.latency:.2f}ms')
         return llm_response

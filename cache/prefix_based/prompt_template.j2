@@ -1,0 +1,14 @@
+You will be given two pieces of text wrapped in $$$ markers:
+Prompt: The original input to respond to
+    Format: $$${{ '{{ <PROMPT> }}' }}$$$
+    Value: $$${{ prompt }}$$$
+Answer Prefix: The beginning segment of a desired final response
+    Format: $$${{ '{{ <PREFIX> }}' }}$$$
+    Value: $$${{ prefix }}$$$
+
+Your task:
+    * Generate only the missing suffix that completes the final answer to the Prompt, assuming the Prefix is the beginning of that answer.
+Rules:
+    1. If the provided Prefix already fully answers the Prompt, return an empty string.
+    2. Do not repeat the Prefix or output the full answer - output *only the suffix*, with no delimiter, without anything else.
+    3. `$$$` is just a delimiter - it is not part of the actual content.
