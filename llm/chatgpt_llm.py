@@ -1,19 +1,28 @@
 import time
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, Stream, BaseModel
 from openai.types import ChatModel
+from openai.types.chat import ChatCompletionChunk
 
-from .illm import ILLM, LLMResponse
+from .illm import ILLM, LLMResponse, StreamedLLMResponse
 
 
-class ChatGPTResponse(LLMResponse):
+class ResponseTokens(BaseModel):
     prompt_tokens: int
     response_tokens: int
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.response_tokens
+
+
+class ChatGPTResponse(LLMResponse, ResponseTokens):
+    pass
+
+
+class StreamedChatGPTResponse(StreamedLLMResponse, ResponseTokens):
+    pass
 
 
 class ChatGPT(ILLM):
@@ -42,4 +51,34 @@ class ChatGPT(ILLM):
             latency=elapsed_ms,
             prompt_tokens=response.usage.prompt_tokens,
             response_tokens=response.usage.completion_tokens,
+        )
+
+    def stream_ask(self, prompt: str) -> StreamedChatGPTResponse:
+        start_time = time.perf_counter()
+        stream = self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            stream_options={"include_usage": True},
+            **self._options,
+        )
+        first_token_time = None
+        prompt_tokens, response_tokens = 0, 0
+        full_response = ''
+
+        for chunk in stream:
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+            if chunk.usage is not None:
+                prompt_tokens = chunk.usage.prompt_tokens
+                response_tokens = chunk.usage.completion_tokens
+            full_response += chunk.choices[0].delta.content
+        end_time = time.perf_counter()
+
+        return StreamedChatGPTResponse(
+            response=full_response,
+            latency=(end_time - start_time) * 1000,
+            delay=(first_token_time - start_time) * 1000,
+            prompt_tokens=prompt_tokens,
+            response_tokens=response_tokens,
         )

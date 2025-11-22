@@ -16,3 +16,7 @@ class ILLM(ABC):
     @abstractmethod
     def ask(self, prompt: str) -> LLMResponse:
         raise NotImplementedError
+
+    @abstractmethod
+    def stream_ask(self, prompt: str) -> StreamedLLMResponse:
+        raise NotImplementedError
