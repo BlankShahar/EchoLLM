@@ -21,9 +21,9 @@ class LLMResponseChunk(BaseModel):
 
 class ILLM(ABC):
     @abstractmethod
-    def ask(self, prompt: str) -> LLMResponse:
+    def ask(self, prompt: str, **kwargs) -> LLMResponse:
         raise NotImplementedError
 
     @abstractmethod
-    def stream_ask(self, prompt: str) -> Iterator[LLMResponseChunk]:
+    def stream_ask(self, prompt: str, **kwargs) -> Iterator[LLMResponseChunk]:
         raise NotImplementedError
