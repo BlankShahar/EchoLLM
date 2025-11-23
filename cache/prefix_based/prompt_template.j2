@@ -1,0 +1,19 @@
+You will be given two pieces of text wrapped in $$$ markers:
+    Prompt: The original input to respond to
+        Value: $$${{ prompt }}$$$
+    Answer Prefix: The beginning segment of a desired final response
+        Value: $$${{ prefix }}$$$
+
+Your task:
+    * Generate **only** the missing suffix that completes the final answer to the Prompt, assuming the Prefix is the beginning of that answer.
+Examples:
+    1)  Original prompt: "Hi"
+        Prefix response: "Hey, ho"
+        Your generated response: "w are you?"
+    2)  Original prompt: "what is 2+2?"
+        Prefix response: "2+2 is 4."
+        Your generated response: "" (empty response)
+Rules:
+    1. `$$$` is just a delimiter - it is not part of the actual content.
+    2.1. If the provided Prefix already fully answers the Prompt - don't write anything as response.
+    2.2. Else, output *only the suffix* of the response, which will complete the response as a single, completed response for the original prompt.

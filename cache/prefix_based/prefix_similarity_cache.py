@@ -4,6 +4,7 @@ from typing import Callable
 
 from pydantic import BaseModel
 
+from cache.prefix_based.errors import MissingKwargError
 from cache.similarity_cache import SimilarityCache
 from cache.similarity_cache.ranking_distance_method import RankingDistanceMethod
 from cache.storage_client.faiss_client import FaissDistanceMethod
@@ -26,7 +27,7 @@ class ItemStats(BaseModel):
     delay: DelayStats
 
 
-class PrefixSimilarityCache(SimilarityCache, ABC):
+class IPrefixSimilarityCache(SimilarityCache, ABC):
     def __init__(
             self,
             max_size: int,
@@ -57,7 +58,7 @@ class PrefixSimilarityCache(SimilarityCache, ABC):
         self.prefix_size_confidence_factor = prefix_size_confidence_factor
         self.itemwise_stats: dict[str, ItemStats] = {}
 
-    def update_item_stats(self, prompt_key: str, llm_delay: float):
+    def _update_delay_stats(self, prompt_key: str, llm_delay: float):
         if prompt_key in self.itemwise_stats:
             item_stats = self.itemwise_stats[prompt_key]
             item_stats.delay.observations += 1
@@ -67,7 +68,6 @@ class PrefixSimilarityCache(SimilarityCache, ABC):
             old_m2 = item_stats.delay.m2
             item_stats.delay.mean = (1 - alpha) * old_mean + alpha * llm_delay
             item_stats.delay.m2 = (1 - alpha) * old_m2 + alpha * (llm_delay ** 2)
-
         else:
             self.itemwise_stats[prompt_key] = ItemStats(
                 key=prompt_key,
@@ -76,3 +76,30 @@ class PrefixSimilarityCache(SimilarityCache, ABC):
                     m2=llm_delay ** 2,  # m2 as x^2 -> std starts at 0
                 ),
             )
+
+    def update_item_stats(self, prompt_key: str, **kwargs):
+        if 'llm_delay' not in kwargs:
+            raise MissingKwargError('llm_delay')
+        self._update_delay_stats(prompt_key, kwargs['llm_delay'])
+
+    def is_hit(self, prompt: str) -> bool:
+        most_similar_request = self._requests_db.most_similar_request(
+            self._embedder(prompt),
+            self._candidates_number
+        )
+        if most_similar_request is None:
+            return False
+        _, distance = most_similar_request
+        return distance <= self._hit_distance_threshold
+
+    def on_hit(self, prompt: str, **kwargs) -> str:
+        hit_request, _ = self._requests_db.most_similar_request(
+            self._embedder(prompt),
+            self._candidates_number
+        )
+        if not kwargs.get('retrieve_only'):
+            self.update_item_stats(hit_request.key, **kwargs)
+        response = self._responses_db.fetch_by_request(hit_request.key)
+        if response is None:
+            raise KeyError(f'Response with request_key=`{hit_request.key}` was not found!')
+        return response.response

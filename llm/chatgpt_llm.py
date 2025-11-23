@@ -1,16 +1,15 @@
 import time
-from typing import Any
+from typing import Any, Iterator, Optional
 
-from openai import OpenAI, Stream, BaseModel
+from openai import OpenAI, BaseModel
 from openai.types import ChatModel
-from openai.types.chat import ChatCompletionChunk
 
-from .illm import ILLM, LLMResponse, StreamedLLMResponse
+from .illm import ILLM, LLMResponse, LLMResponseChunk
 
 
 class ResponseTokens(BaseModel):
-    prompt_tokens: int
-    response_tokens: int
+    prompt_tokens: Optional[int] = None
+    response_tokens: Optional[int] = None
 
     @property
     def total_tokens(self) -> int:
@@ -21,7 +20,11 @@ class ChatGPTResponse(LLMResponse, ResponseTokens):
     pass
 
 
-class StreamedChatGPTResponse(StreamedLLMResponse, ResponseTokens):
+class ChatGPTResponseChunk(LLMResponseChunk, ResponseTokens):
+    """
+    Note: `prompt_tokens` and `response_tokens` will be set *only* for the last chunk.
+            This is due to chatgpt interior implementation.
+    """
     pass
 
 
@@ -53,7 +56,7 @@ class ChatGPT(ILLM):
             response_tokens=response.usage.completion_tokens,
         )
 
-    def stream_ask(self, prompt: str) -> StreamedChatGPTResponse:
+    def stream_ask(self, prompt: str) -> Iterator[ChatGPTResponseChunk]:
         start_time = time.perf_counter()
         stream = self._client.chat.completions.create(
             model=self._model,
@@ -62,23 +65,16 @@ class ChatGPT(ILLM):
             stream_options={"include_usage": True},
             **self._options,
         )
-        first_token_time = None
-        prompt_tokens, response_tokens = 0, 0
-        full_response = ''
 
-        for chunk in stream:
-            if first_token_time is None:
-                first_token_time = time.perf_counter()
-            if chunk.usage is not None:
-                prompt_tokens = chunk.usage.prompt_tokens
-                response_tokens = chunk.usage.completion_tokens
-            full_response += chunk.choices[0].delta.content
-        end_time = time.perf_counter()
+        for i, chunk in enumerate(stream, start=1):
+            prompt_tokens = chunk.usage.prompt_tokens if chunk.usage else None
+            response_tokens = chunk.usage.completion_tokens if chunk.usage else None
+            chunk_response = chunk.choices[0].delta.content
+            current_time = time.perf_counter()
 
-        return StreamedChatGPTResponse(
-            response=full_response,
-            latency=(end_time - start_time) * 1000,
-            delay=(first_token_time - start_time) * 1000,
-            prompt_tokens=prompt_tokens,
-            response_tokens=response_tokens,
-        )
+            yield ChatGPTResponseChunk(
+                response_chunk=chunk_response,
+                delay=(current_time - start_time) * 1000,
+                prompt_tokens=prompt_tokens,
+                response_tokens=response_tokens,
+            )

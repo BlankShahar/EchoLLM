@@ -2,8 +2,7 @@ from typing import Callable, Any
 
 from cachetools import LRUCache
 
-from cache.prefix_based.errors import MissingKwargError
-from cache.prefix_based.prefix_similarity_cache import PrefixSimilarityCache
+from cache.prefix_based.prefix_similarity_cache import IPrefixSimilarityCache
 from cache.similarity_cache.ranking_distance_method import RankingDistanceMethod
 from cache.storage_client.faiss_client import FaissDistanceMethod
 from cache.storage_client.records import EmbeddedRequestRecord, ResponseRecord
@@ -20,7 +19,7 @@ class HookedLRUCache(LRUCache):
         return k, v
 
 
-class PrefixLRUSimilarityCache(PrefixSimilarityCache):
+class PrefixLRUSimilarityCache(IPrefixSimilarityCache):
     def __init__(
             self,
             max_size: int,
@@ -48,12 +47,8 @@ class PrefixLRUSimilarityCache(PrefixSimilarityCache):
         self._lru_cache = HookedLRUCache(max_size)
 
     def on_miss(self, prompt: str, llm_response: str, **kwargs):
-        if 'llm_delay' not in kwargs:
-            raise MissingKwargError('llm_delay')
-
         prompt_key = self._generate_key(prompt)
-        self.update_item_stats(prompt_key, kwargs['llm_delay'])
-
+        self.update_item_stats(prompt_key, **kwargs)
         self._lru_cache[prompt_key] = True
 
         # if the last insert caused an eviction due to reaching maximum capacity
@@ -66,8 +61,8 @@ class PrefixLRUSimilarityCache(PrefixSimilarityCache):
             EmbeddedRequestRecord(key=prompt_key, vector=self._embedder(prompt))
         )
         item_stats = self.itemwise_stats[prompt_key]
-        prefix_size = self.bandwidth * (
-                item_stats.delay.mean + self.prefix_size_confidence_factor * item_stats.delay.std)
+        prefix_size = round(self.bandwidth * (
+                item_stats.delay.mean + self.prefix_size_confidence_factor * item_stats.delay.std))
         prefix_llm_response = llm_response[:prefix_size]
         response_key = self._generate_key(llm_response)
         self._responses_db.save(
