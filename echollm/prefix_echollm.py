@@ -1,5 +1,4 @@
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from itertools import chain
 from pathlib import Path
 from typing import Optional, Iterator
