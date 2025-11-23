@@ -1,9 +1,11 @@
+from typing import Iterator
+
 from cache.prefix_based.prefix_lru_similarity_cache import PrefixLRUSimilarityCache
 from cache.similarity_cache.ranking_distance_method import RankingDistanceMethod
 from cache.storage_client.faiss_client import FaissDistanceMethod
+from echollm.prefix_echollm import PrefixEchoLLM
 from llm import Ollama
 from llm.ollama_llm import OllamaModel
-from echollm.prefix_echollm import PrefixEchoLLM
 from text_similarity import text_embedder
 
 
@@ -21,7 +23,7 @@ def run_cache_example():
             prefix_size_confidence_factor=2
         ),
         llm=Ollama(
-            model=OllamaModel.GEMMA3_1B,
+            model=OllamaModel.QWEN3_4B,
             host='http://localhost:11434',
         )
     )
@@ -29,19 +31,24 @@ def run_cache_example():
     # First prompt must be a Miss
     request1 = 'Show me 2 ways to sort a list of numbers in python'
     response1 = echo_llm.stream_ask(request1)
-    print(response1)
+    print_stream(response1)
     print('-------------')
 
     # Suppose to be a Hit
     request2 = 'Explain in 2 approaches how to sort a list in python'
     response2 = echo_llm.stream_ask(request2)
-    print(response2)
+    print_stream(response2)
     print('-------------')
 
     # Suppose to be a Miss
     request3 = 'Hi'
     response3 = echo_llm.stream_ask(request3)
-    print(response3)
+    print_stream(response3)
+
+
+def print_stream(stream: Iterator[str]):
+    for chunk in stream:
+        print(chunk, end="", flush=True)
 
 
 if __name__ == '__main__':

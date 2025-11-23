@@ -1,10 +1,10 @@
 import time
 from enum import StrEnum
-from typing import Any
+from typing import Any, Iterator
 
 import ollama
 
-from .illm import ILLM, LLMResponse, StreamedLLMResponse
+from .illm import ILLM, LLMResponse, LLMResponseChunk
 
 
 class OllamaModel(StrEnum):
@@ -33,7 +33,7 @@ class OllamaResponse(LLMResponse):
     pass
 
 
-class StreamedOllamaResponse(StreamedLLMResponse):
+class OllamaResponseChunk(LLMResponseChunk):
     pass
 
 
@@ -57,22 +57,19 @@ class Ollama(ILLM):
         elapsed_ms = (end_time - start_time) * 1000
         return OllamaResponse(response=result.response, latency=elapsed_ms)
 
-    def stream_ask(self, prompt: str, think: bool = False) -> StreamedLLMResponse:
+    def stream_ask(self, prompt: str, think: bool = False) -> Iterator[OllamaResponseChunk]:
         start_time = time.perf_counter()
-        result = self._client.generate(
+        stream = self._client.generate(
             model=self._model,
             prompt=prompt,
             options=self._options,
             think=think,
             stream=True,
         )
-        full_response = next(result).response  # get the first token
-        first_token_time = time.perf_counter()
-        full_response += ''.join([token.response for token in result])  # get the rest of the tokens
-        end_time = time.perf_counter()
-
-        return StreamedLLMResponse(
-            response=full_response,
-            latency=(end_time - start_time) * 1000,
-            delay=(first_token_time - start_time) * 1000,
-        )
+        for i, chunk in enumerate(stream, start=1):
+            current_time = time.perf_counter()
+            yield LLMResponseChunk(
+                response_chunk=chunk.response,
+                chunk_number=i,
+                delay=(current_time - start_time) * 1000,
+            )
