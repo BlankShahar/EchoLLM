@@ -37,7 +37,7 @@ class PrefixEchoLLM:
                 (_CWD.parent / 'cache' / 'prefix_based' / 'prompt_template.j2').read_text()
             ).render(prompt=prompt, prefix=prefix_response)
             llm_stream = self._stream_ask_llm(prefix_prompt, False, True)
-            return chain([prefix_prompt], llm_stream)
+            return chain([prefix_response], llm_stream)
         else:
             logger.info('Cache Miss', extra={'prompt': prompt})
             return self._stream_ask_llm(prompt, True, False)
