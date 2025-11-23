@@ -3,6 +3,7 @@ from enum import StrEnum
 from typing import Any, Iterator
 
 import ollama
+from tqdm import tqdm
 
 from .illm import ILLM, LLMResponse, LLMResponseChunk
 
@@ -14,8 +15,6 @@ class OllamaModel(StrEnum):
     QWEN3_CODER_480B = "qwen3-coder:480b"
 
     LLAMA3_1_8B = "llama3.1:8b"
-
-    KIMI_K2_1T = "kimi-k2:1t"
 
     GPT_OSS_20B = "gpt-oss:20b"
     GPT_OSS_120B = "gpt-oss:120b"
@@ -40,7 +39,7 @@ class OllamaResponseChunk(LLMResponseChunk):
 class Ollama(ILLM):
     def __init__(self, model: OllamaModel, host: str, options: dict[str, Any] | None = None):
         self._client = ollama.Client(host=host)
-        self._client.pull(model)
+        self._pull_model(model)
         self._model = model
         self._options = options or {}
 
@@ -73,3 +72,10 @@ class Ollama(ILLM):
                 chunk_number=i,
                 delay=(current_time - start_time) * 1000,
             )
+
+    def _pull_model(self, model: str):
+        pbar = None
+        for c in self._client.pull(model, stream=True):
+            if "total" in c:
+                pbar = pbar or tqdm(total=c["total"], unit="B", unit_scale=True, desc=f'Pulling model "{model}"...')
+                pbar.update(c["completed"] - pbar.n)
