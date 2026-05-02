@@ -56,7 +56,7 @@ class FaissClient:
             return []
 
         # query in index-space (normalize only for cosine)
-        q_vec = vector_utils.normalize(vector) if self.distance_method == FaissDistanceMethod.COSINE else vector
+        q_vec = vector_utils.normalize(tuple(vector)) if self.distance_method == FaissDistanceMethod.COSINE else vector
         xq = np.ascontiguousarray([np.asarray(q_vec, dtype=np.float32)], dtype=np.float32)
 
         k_eff = min(k, self.index.ntotal)

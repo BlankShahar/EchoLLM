@@ -26,7 +26,6 @@ class RequestsDB:
         self._faiss_client = FaissClient(db_distance_method)
         self._ranking_distance_method = ranking_distance_method
 
-    @hashable_lru_cache
     def most_similar_request(self, embedded_request: list[float], k=100) -> tuple[EmbeddedRequestRecord, float] | None:
         """
         Returns the most similar (embedded, i.e. vectorized) question in the DB which were previously asked.
