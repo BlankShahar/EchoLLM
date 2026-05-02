@@ -44,6 +44,14 @@ class LRUSimilarityCache(SimilarityCache):
         )
         self._lru_cache = HookedLRUCache(max_size)
 
+    def on_hit(self, prompt: str, **kwargs) -> str:
+        hit_request, _ = self._requests_db.most_similar_request(
+            self._embedder(prompt),
+            self._candidates_number
+        )
+        self._lru_cache.get(hit_request.key)  # update recency
+        return super().on_hit(prompt, **kwargs)
+
     def on_miss(self, prompt: str, llm_response: str, **kwargs):
         prompt_key = self._generate_key(prompt)
         self._lru_cache[prompt_key] = True
