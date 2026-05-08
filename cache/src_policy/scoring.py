@@ -1,40 +1,193 @@
+"""
+scoring.py — Cost, demand, and unified SRC score computation.
+
+All formulas are direct translations from the project spec.
+
+Notation (from spec)
+--------------------
+  L_i   — measured LLM latency at miss time (milliseconds)
+  T_i   — token count of (prompt + response)
+  C_i   — raw saved cost = L_i * log(1 + T_i)
+  Ĉ_i   — normalised cost  = C_i / (1 + C_i)   ∈ [0, 1)
+  D(p)  — raw semantic demand  ∈ [1, 1 + 2k]
+  D̂(p)  — normalised demand   = D(p) / (1 + 2k)  ∈ (0, 1]
+  R_i   — safety score        ∈ {0.0, 0.3, 0.7, 1.0}
+  S_i   — unified SRC score   = D̂_i * Ĉ_i * R_i
+"""
+
+from __future__ import annotations
+
 import math
+from typing import Sequence
 
-from .models import SRCConfig, SRCMeta
+import numpy as np
 
 
-def cosine(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
+# ---------------------------------------------------------------------------
+# Token estimation
+# ---------------------------------------------------------------------------
+
+def estimate_tokens(prompt: str, response: str) -> int:
+    """
+    Estimate total token count for the (prompt + response) pair.
+
+    Uses the rough heuristic  T ≈ (|prompt| + |response|) / 4  when a real
+    tokenizer is not available.  The minimum is 1 to keep log(1 + T) > 0.
+    """
+    return max(1, (len(prompt) + len(response)) // 4)
+
+
+# ---------------------------------------------------------------------------
+# Saved-cost score
+# ---------------------------------------------------------------------------
+
+def compute_cost_hat(latency_ms: float, token_count: int) -> float:
+    """
+    Compute the normalised saved-cost score  Ĉ ∈ [0, 1).
+
+    Formula
+    -------
+        raw  = L * log(1 + T)
+        Ĉ    = raw / (1 + raw)
+
+    Parameters
+    ----------
+    latency_ms : float
+        Measured LLM latency in **milliseconds** (as reported by EchoLLM).
+    token_count : int
+        Total token count for the prompt + response pair (≥ 1).
+
+    Returns
+    -------
+    float
+        Ĉ ∈ [0, 1).  Returns 0.0 when latency or tokens are non-positive.
+    """
+    if latency_ms <= 0.0 or token_count <= 0:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    return 0.0 if na == 0.0 or nb == 0.0 else max(-1.0, min(1.0, dot / (na * nb)))
+
+    raw = latency_ms * math.log1p(token_count)  # L * log(1 + T)
+    return raw / (1.0 + raw)
 
 
-def approx_tokens(text: str) -> int:
-    return max(1, math.ceil(len(text) / 4))
+# ---------------------------------------------------------------------------
+# Cosine similarity helpers (operate on plain Python sequences / tuples)
+# ---------------------------------------------------------------------------
+
+def _cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
+    """
+    Exact cosine similarity between two vectors.
+
+    Returns 0.0 when either vector is the zero vector.
+    """
+    arr_a = np.asarray(a, dtype=np.float64)
+    arr_b = np.asarray(b, dtype=np.float64)
+    norm_a = float(np.linalg.norm(arr_a))
+    norm_b = float(np.linalg.norm(arr_b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(np.dot(arr_a, arr_b) / (norm_a * norm_b))
 
 
-def saved_cost(latency_ms: float, total_tokens: int) -> float:
-    return max(0.0, latency_ms) * math.log1p(max(0, total_tokens))
+def _cosine_similarity_normalized(a: Sequence[float], b: Sequence[float]) -> float:
+    """
+    Fast cosine similarity when *both* vectors are already L2-normalised.
+
+    Reduces to a dot product, which is O(d) with no division.
+    """
+    return float(np.dot(np.asarray(a, dtype=np.float64),
+                        np.asarray(b, dtype=np.float64)))
 
 
-def quality(meta: SRCMeta, config: SRCConfig) -> float:
-    if meta.semantic_hits == 0:
-        return 1.0
-    return max(config.q_min, min(1.0, meta.avg_semantic_similarity))
+def normalize_embedding(vec: Sequence[float]) -> tuple[float, ...]:
+    """L2-normalise *vec* and return it as an immutable tuple."""
+    arr = np.asarray(vec, dtype=np.float64)
+    norm = float(np.linalg.norm(arr))
+    if norm == 0.0:
+        return tuple(arr.tolist())
+    return tuple((arr / norm).tolist())
 
 
-def freshness(meta: SRCMeta, now: float, config: SRCConfig) -> float:
-    return math.exp(-config.freshness_decay * max(0.0, now - meta.created_at))
+# ---------------------------------------------------------------------------
+# Semantic demand
+# ---------------------------------------------------------------------------
+
+def compute_demand(
+        query_embedding: Sequence[float],
+        cache_embeddings: list[Sequence[float]],
+        ghost_embeddings: list[Sequence[float]],
+        k: int,
+        theta_near: float,
+) -> float:
+    """
+    Compute the raw semantic demand  D(p)  for prompt *p*.
+
+    Formula (spec §10)
+    ------------------
+        D(p) = 1
+             + Σ_{j ∈ TopK_cache(p)}  1[ sim(p, p_j) ≥ θ_near ]
+             + Σ_{g ∈ TopK_ghost(p)}  1[ sim(p, p_g) ≥ θ_near ]
+
+    Parameters
+    ----------
+    query_embedding : Sequence[float]
+        Raw (not necessarily normalised) embedding of the query prompt.
+    cache_embeddings : list[Sequence[float]]
+        Up to *k* candidate embeddings from the cache (already retrieved
+        from the FAISS index — the caller is responsible for the TopK fetch).
+    ghost_embeddings : list[Sequence[float]]
+        Up to *k* candidate embeddings from the ghost history (also pre-
+        retrieved by the caller).
+    k : int
+        Number of neighbours used in each sum.  Both lists are expected to
+        have at most *k* elements already; this parameter is used only to
+        compute the normaliser.
+    theta_near : float
+        Minimum cosine similarity for a neighbour to count as "nearby"
+        (spec default 0.80).
+
+    Returns
+    -------
+    float
+        Raw demand D(p) ∈ [1, 1 + 2k].
+    """
+    demand = 1  # cold-start base
+
+    for emb in cache_embeddings:
+        if _cosine_similarity(query_embedding, emb) >= theta_near:
+            demand += 1
+
+    for emb in ghost_embeddings:
+        if _cosine_similarity(query_embedding, emb) >= theta_near:
+            demand += 1
+
+    return float(demand)
 
 
-def eviction_value(meta: SRCMeta, now: float, config: SRCConfig) -> float:
-    demand = 1.0 + (
-            meta.exact_hits + meta.semantic_hits + 0.5 * meta.near_misses
-    ) * math.exp(-config.demand_decay * max(0.0, now - meta.last_access_at))
+def normalize_demand(raw_demand: float, k: int) -> float:
+    """
+    Normalise raw demand to  D̂ ∈ (0, 1].
 
-    return (
-            demand * meta.saved_cost * quality(meta, config) * freshness(meta, now, config) * meta.safety_score
-    ) / max(1.0, meta.storage_size)
+    Formula: D̂ = D / (1 + 2k)
+    """
+    normaliser = 1.0 + 2.0 * k
+    return raw_demand / normaliser
+
+
+# ---------------------------------------------------------------------------
+# Unified SRC score
+# ---------------------------------------------------------------------------
+
+def src_score(demand_hat: float, cost_hat: float, safety: float) -> float:
+    """
+    Compute the unified SRC score  S = D̂ · Ĉ · R.
+
+    All three factors are already normalised to (0, 1].
+    The product is high only when the prompt is in a dense semantic region,
+    the response was expensive to regenerate, *and* it is safe to reuse.
+
+    Returns
+    -------
+    float
+        S ∈ [0, 1).
+    """
+    return demand_hat * cost_hat * safety
