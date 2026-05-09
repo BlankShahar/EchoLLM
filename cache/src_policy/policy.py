@@ -18,6 +18,7 @@ from cache.similarity_cache.ranking_distance_method import RankingDistanceMethod
 from cache.similarity_cache.similarity_cache import SimilarityCache
 from cache.storage_client.faiss_client import FaissDistanceMethod
 from cache.storage_client.records import EmbeddedRequestRecord, ResponseRecord
+from text_similarity.vector_utils import calculators
 from .models import GhostHistory, SRCItemMeta
 from .safety import (
     has_private_pattern,
@@ -29,7 +30,6 @@ from .scoring import (
     compute_demand,
     estimate_tokens,
     normalize_demand,
-    normalize_embedding,
     src_score,
 )
 
@@ -213,7 +213,7 @@ class SRCSimilarityCache(SimilarityCache):
         # Compute candidate scores
         prompt_key = self._generate_key(prompt)
         embedding_raw = self._embedder(prompt)
-        embedding_norm = normalize_embedding(embedding_raw)
+        embedding_norm = tuple(calculators.normalize(embedding_raw))
 
         tokens = estimate_tokens(prompt, llm_response)
         normalised_cost = compute_normalised_cost(latency_ms=llm_latency, token_count=tokens)
@@ -319,7 +319,7 @@ class SRCSimilarityCache(SimilarityCache):
             raw_vec = self._requests_db._faiss_client._reconstruct_original_vector(
                 faiss_items[victim_key]
             )
-            victim_embedding = normalize_embedding(raw_vec)
+            victim_embedding = tuple(calculators.normalize(raw_vec))
 
         # Remove from EchoLLM's storage
         self._requests_db.remove(victim_key)
@@ -378,7 +378,7 @@ class SRCSimilarityCache(SimilarityCache):
             normalised_demand = normalize_demand(demand_raw, self._k)
             score = src_score(normalised_demand, meta.normalised_cost, meta.safety)
 
-            if score < best_victim_score:
+            if score < best_victim_score:  # lowest seen score
                 best_victim_score = score
                 best_victim_key = key
 

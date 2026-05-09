@@ -16,18 +16,24 @@ def manhattan_distance(vector1: Iterable[float], vector2: Iterable[float]) -> fl
 
 
 @lru_cache
-def cosine_distance(vector1: Iterable[float], vector2: Iterable[float]) -> float:
-    dot_product = sum(a * b for a, b in zip(vector1, vector2))
-    norm1 = math.sqrt(sum(a * a for a in vector1))
-    norm2 = math.sqrt(sum(b * b for b in vector2))
+def cosine_similarity(vector1: Iterable[float], vector2: Iterable[float]) -> float:
+    """
+    Exact cosine similarity between two vectors.
 
-    if norm1 == 0 and norm2 == 0:
+    Returns 0.0 when either vector is the zero vector.
+    """
+    arr_a = np.asarray(vector1, dtype=np.float64)
+    arr_b = np.asarray(vector2, dtype=np.float64)
+    normalised_a = float(np.linalg.norm(arr_a))
+    normalised_b = float(np.linalg.norm(arr_b))
+    if normalised_a == 0.0 or normalised_b == 0.0:
         return 0.0
-    if norm1 == 0 or norm2 == 0:
-        return 1.0  # convention: undefined → maximally distant
+    return float(np.dot(arr_a, arr_b) / (normalised_a * normalised_b))
 
-    cosine_similarity = dot_product / (norm1 * norm2)
-    return 1 - cosine_similarity
+
+@lru_cache
+def cosine_distance(vector1: Iterable[float], vector2: Iterable[float]) -> float:
+    return 1 - cosine_similarity(vector1, vector2)
 
 
 @lru_cache

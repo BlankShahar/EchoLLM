@@ -18,7 +18,7 @@ Notation (from spec)
 import math
 from typing import Sequence
 
-import numpy as np
+from text_similarity.vector_utils.calculators import cosine_similarity
 
 
 def estimate_tokens(prompt: str, response: str) -> int:
@@ -59,40 +59,6 @@ def compute_normalised_cost(latency_ms: float, token_count: int) -> float:
     return raw / (1.0 + raw)
 
 
-def _cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
-    """
-    Exact cosine similarity between two vectors.
-
-    Returns 0.0 when either vector is the zero vector.
-    """
-    arr_a = np.asarray(a, dtype=np.float64)
-    arr_b = np.asarray(b, dtype=np.float64)
-    normalised_a = float(np.linalg.norm(arr_a))
-    normalised_b = float(np.linalg.norm(arr_b))
-    if normalised_a == 0.0 or normalised_b == 0.0:
-        return 0.0
-    return float(np.dot(arr_a, arr_b) / (normalised_a * normalised_b))
-
-
-def _cosine_similarity_normalized(a: Sequence[float], b: Sequence[float]) -> float:
-    """
-    Fast cosine similarity when *both* vectors are already L2-normalised.
-
-    Reduces to a dot product, which is O(d) with no division.
-    """
-    return float(np.dot(np.asarray(a, dtype=np.float64),
-                        np.asarray(b, dtype=np.float64)))
-
-
-def normalize_embedding(vec: Sequence[float]) -> tuple[float, ...]:
-    """L2-normalise *vec* and return it as an immutable tuple."""
-    arr = np.asarray(vec, dtype=np.float64)
-    norm = float(np.linalg.norm(arr))
-    if norm == 0.0:
-        return tuple(arr.tolist())
-    return tuple((arr / norm).tolist())
-
-
 def compute_demand(
         query_embedding: Sequence[float],
         cache_embeddings: list[Sequence[float]],
@@ -130,11 +96,11 @@ def compute_demand(
     demand = 1  # cold-start base
 
     for emb in cache_embeddings:
-        if _cosine_similarity(query_embedding, emb) >= theta_near:
+        if cosine_similarity(query_embedding, emb) >= theta_near:
             demand += 1
 
     for emb in ghost_embeddings:
-        if _cosine_similarity(query_embedding, emb) >= theta_near:
+        if cosine_similarity(query_embedding, emb) >= theta_near:
             demand += 1
 
     return float(demand)
