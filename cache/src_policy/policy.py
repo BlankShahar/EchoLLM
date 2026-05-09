@@ -210,9 +210,7 @@ class SRCSimilarityCache(SimilarityCache):
         **kwargs
             Any additional keyword arguments passed through from EchoLLM.
         """
-        # ----------------------------------------------------------------
-        # 1. Compute candidate scores
-        # ----------------------------------------------------------------
+        # Compute candidate scores
         prompt_key = self._generate_key(prompt)
         embedding_raw = self._embedder(prompt)
         embedding_norm = normalize_embedding(embedding_raw)
@@ -233,17 +231,13 @@ class SRCSimilarityCache(SimilarityCache):
             prompt_key[:8], normalised_cost, r_score, normalised_demand, s_new,
         )
 
-        # ----------------------------------------------------------------
-        # 2. Reject if unsafe
-        # ----------------------------------------------------------------
+        # Reject if unsafe
         if r_score < self._theta_safe:
             logger.debug("Rejected (unsafe R=%.2f)  key=%s", r_score, prompt_key[:8])
             self._ghosts.add(embedding_norm, reason="rejected")
             return
 
-        # ----------------------------------------------------------------
-        # 3. Admit if space is available
-        # ----------------------------------------------------------------
+        # Admit if space is available
         if self.current_size < self._max_size:
             self._admit(
                 prompt_key=prompt_key,
@@ -254,9 +248,7 @@ class SRCSimilarityCache(SimilarityCache):
             )
             return
 
-        # ----------------------------------------------------------------
-        # 4. Cache is full — sampled eviction
-        # ----------------------------------------------------------------
+        # Cache is full — sampled eviction
         victim_key, victim_score = self._find_victim()
 
         if victim_key is None:
@@ -442,10 +434,6 @@ class SRCSimilarityCache(SimilarityCache):
             ghost_embeddings=ghost_embeddings,
             theta_near=self._theta_near,
         )
-
-    # ------------------------------------------------------------------
-    # Diagnostic helpers (useful for tests and benchmarks)
-    # ------------------------------------------------------------------
 
     def get_metadata(self, prompt_key: str) -> SRCItemMeta | None:
         """Return SRC metadata for *prompt_key*, or None if not cached."""

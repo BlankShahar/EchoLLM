@@ -5,19 +5,13 @@ SRC stores only *decision metadata* alongside EchoLLM's existing request /
 response databases.  Prompts, embeddings, and responses are never duplicated.
 """
 
-from __future__ import annotations
-
 from collections import deque
-from dataclasses import dataclass
-from typing import Deque, Literal
+from typing import Deque, Literal, Self
+
+from pydantic import BaseModel, model_validator
 
 
-# ---------------------------------------------------------------------------
-# Per-item metadata stored by SRC
-# ---------------------------------------------------------------------------
-
-@dataclass
-class SRCItemMeta:
+class SRCItemMeta(BaseModel):
     """
     Lightweight metadata record for one cached item.
 
@@ -34,22 +28,19 @@ class SRCItemMeta:
     normalised_cost: float  # Ĉ_i  ∈ [0, 1)
     safety: float  # R_i  ∈ [0, 1]
 
-    def __post_init__(self) -> None:
+    @model_validator(mode='after')
+    def validate(self) -> Self:
         if not (0.0 <= self.normalised_cost < 1.0):
-            raise ValueError(f"cost_hat must be in [0, 1), got {self.normalised_cost}")
+            raise ValueError(f"normalised_cost must be in [0, 1), got {self.normalised_cost}")
         if not (0.0 <= self.safety <= 1.0):
             raise ValueError(f"safety must be in [0, 1], got {self.safety}")
+        return self
 
-
-# ---------------------------------------------------------------------------
-# Ghost history entry
-# ---------------------------------------------------------------------------
 
 GhostReason = Literal["rejected", "evicted"]
 
 
-@dataclass
-class GhostEntry:
+class GhostEntry(BaseModel):
     """
     A ghost record for a semantic region that was rejected or evicted.
 
@@ -69,10 +60,6 @@ class GhostEntry:
     reason: GhostReason
 
 
-# ---------------------------------------------------------------------------
-# Ghost history container
-# ---------------------------------------------------------------------------
-
 class GhostHistory:
     """
     Bounded FIFO ghost history with O(1) insertion and O(n) similarity scan.
@@ -90,10 +77,6 @@ class GhostHistory:
         self._max_size: int = 2 * cache_capacity
         self._entries: Deque[GhostEntry] = deque()
 
-    # ------------------------------------------------------------------
-    # Mutation
-    # ------------------------------------------------------------------
-
     def add(self, embedding: tuple[float, ...], reason: GhostReason) -> None:
         """Insert a new ghost entry, evicting the oldest one if at capacity."""
         if len(self._entries) >= self._max_size:
@@ -103,10 +86,6 @@ class GhostHistory:
     def clear(self) -> None:
         """Remove all ghost entries (useful for testing)."""
         self._entries.clear()
-
-    # ------------------------------------------------------------------
-    # Read access
-    # ------------------------------------------------------------------
 
     def entries(self) -> list[GhostEntry]:
         """Return a snapshot of all ghost entries (oldest first)."""

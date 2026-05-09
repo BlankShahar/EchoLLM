@@ -15,17 +15,11 @@ Notation (from spec)
   S_i   — unified SRC score   = D̂_i * Ĉ_i * R_i
 """
 
-from __future__ import annotations
-
 import math
 from typing import Sequence
 
 import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Token estimation
-# ---------------------------------------------------------------------------
 
 def estimate_tokens(prompt: str, response: str) -> int:
     """
@@ -65,10 +59,6 @@ def compute_normalised_cost(latency_ms: float, token_count: int) -> float:
     return raw / (1.0 + raw)
 
 
-# ---------------------------------------------------------------------------
-# Cosine similarity helpers (operate on plain Python sequences / tuples)
-# ---------------------------------------------------------------------------
-
 def _cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     """
     Exact cosine similarity between two vectors.
@@ -102,10 +92,6 @@ def normalize_embedding(vec: Sequence[float]) -> tuple[float, ...]:
         return tuple(arr.tolist())
     return tuple((arr / norm).tolist())
 
-
-# ---------------------------------------------------------------------------
-# Semantic demand
-# ---------------------------------------------------------------------------
 
 def compute_demand(
         query_embedding: Sequence[float],
@@ -163,10 +149,6 @@ def normalize_demand(raw_demand: float, k: int) -> float:
     normaliser = 1.0 + 2.0 * k
     return raw_demand / normaliser
 
-
-# ---------------------------------------------------------------------------
-# Unified SRC score
-# ---------------------------------------------------------------------------
 
 def src_score(normalised_demand: float, normalised_cost: float, safety: float) -> float:
     """

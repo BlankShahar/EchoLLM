@@ -14,14 +14,8 @@ Stable educational or factual prompt  → 1.0
 Otherwise                             → 0.7
 """
 
-from __future__ import annotations
-
 import re
 from functools import lru_cache
-
-# ---------------------------------------------------------------------------
-# Compiled patterns  (module-level so they are compiled once)
-# ---------------------------------------------------------------------------
 
 # --- Private / sensitive data ---
 _PRIVATE_PATTERNS: list[re.Pattern[str]] = [
@@ -92,10 +86,6 @@ _RAG_MARKERS: frozenset[str] = frozenset(
     ]
 )
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def has_private_pattern(text: str) -> bool:
     """Return True if *text* appears to contain private / sensitive data."""
