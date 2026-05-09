@@ -37,11 +37,7 @@ def estimate_tokens(prompt: str, response: str) -> int:
     return max(1, (len(prompt) + len(response)) // 4)
 
 
-# ---------------------------------------------------------------------------
-# Saved-cost score
-# ---------------------------------------------------------------------------
-
-def compute_cost_hat(latency_ms: float, token_count: int) -> float:
+def compute_normalised_cost(latency_ms: float, token_count: int) -> float:
     """
     Compute the normalised saved-cost score  Ĉ ∈ [0, 1).
 
@@ -81,11 +77,11 @@ def _cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
     """
     arr_a = np.asarray(a, dtype=np.float64)
     arr_b = np.asarray(b, dtype=np.float64)
-    norm_a = float(np.linalg.norm(arr_a))
-    norm_b = float(np.linalg.norm(arr_b))
-    if norm_a == 0.0 or norm_b == 0.0:
+    normalised_a = float(np.linalg.norm(arr_a))
+    normalised_b = float(np.linalg.norm(arr_b))
+    if normalised_a == 0.0 or normalised_b == 0.0:
         return 0.0
-    return float(np.dot(arr_a, arr_b) / (norm_a * norm_b))
+    return float(np.dot(arr_a, arr_b) / (normalised_a * normalised_b))
 
 
 def _cosine_similarity_normalized(a: Sequence[float], b: Sequence[float]) -> float:
@@ -115,7 +111,6 @@ def compute_demand(
         query_embedding: Sequence[float],
         cache_embeddings: list[Sequence[float]],
         ghost_embeddings: list[Sequence[float]],
-        k: int,
         theta_near: float,
 ) -> float:
     """
@@ -137,10 +132,6 @@ def compute_demand(
     ghost_embeddings : list[Sequence[float]]
         Up to *k* candidate embeddings from the ghost history (also pre-
         retrieved by the caller).
-    k : int
-        Number of neighbours used in each sum.  Both lists are expected to
-        have at most *k* elements already; this parameter is used only to
-        compute the normaliser.
     theta_near : float
         Minimum cosine similarity for a neighbour to count as "nearby"
         (spec default 0.80).
@@ -177,7 +168,7 @@ def normalize_demand(raw_demand: float, k: int) -> float:
 # Unified SRC score
 # ---------------------------------------------------------------------------
 
-def src_score(demand_hat: float, cost_hat: float, safety: float) -> float:
+def src_score(normalised_demand: float, normalised_cost: float, safety: float) -> float:
     """
     Compute the unified SRC score  S = D̂ · Ĉ · R.
 
@@ -190,4 +181,4 @@ def src_score(demand_hat: float, cost_hat: float, safety: float) -> float:
     float
         S ∈ [0, 1).
     """
-    return demand_hat * cost_hat * safety
+    return normalised_demand * normalised_cost * safety

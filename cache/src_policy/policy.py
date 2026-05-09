@@ -10,8 +10,6 @@ Public surface
     SRCPolicy            — alias for experiments
 """
 
-from __future__ import annotations
-
 import logging
 import random
 from typing import Callable
@@ -27,7 +25,7 @@ from .safety import (
     safety_score,
 )
 from .scoring import (
-    compute_cost_hat,
+    compute_normalised_cost,
     compute_demand,
     estimate_tokens,
     normalize_demand,
@@ -36,10 +34,6 @@ from .scoring import (
 )
 
 logger = logging.getLogger("EchoLLM.SRC")
-
-# ---------------------------------------------------------------------------
-# Default hyper-parameters (spec §5)
-# ---------------------------------------------------------------------------
 
 _DEFAULT_K: int = 8  # neighbours for demand estimation
 _DEFAULT_S: int = 16  # eviction sample size
@@ -97,10 +91,6 @@ class SRCSimilarityCache(SimilarityCache):
         Random seed for reproducible sampled eviction.
     """
 
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
-
     def __init__(
             self,
             max_size: int,
@@ -143,7 +133,7 @@ class SRCSimilarityCache(SimilarityCache):
         self._metadata: dict[str, SRCItemMeta] = {}
 
         # Ghost history
-        self._ghost: GhostHistory = GhostHistory(cache_capacity=max_size)
+        self._ghosts: GhostHistory = GhostHistory(cache_capacity=max_size)
 
         # Reproducible random sampling for eviction
         self._rng: random.Random = random.Random(seed)
@@ -153,10 +143,6 @@ class SRCSimilarityCache(SimilarityCache):
             "θ_hit=%.2f  θ_near=%.2f  θ_safe=%.2f  ε=%.3f  seed=%s",
             max_size, k, s, theta_hit, theta_near, theta_safe, epsilon, seed,
         )
-
-    # ------------------------------------------------------------------
-    # ICache interface — hit path
-    # ------------------------------------------------------------------
 
     def is_hit(self, prompt: str) -> bool:
         """
@@ -203,10 +189,6 @@ class SRCSimilarityCache(SimilarityCache):
             )
         return response.response
 
-    # ------------------------------------------------------------------
-    # ICache interface — miss path
-    # ------------------------------------------------------------------
-
     def on_miss(
             self,
             prompt: str,
@@ -236,19 +218,19 @@ class SRCSimilarityCache(SimilarityCache):
         embedding_norm = normalize_embedding(embedding_raw)
 
         tokens = estimate_tokens(prompt, llm_response)
-        cost_hat = compute_cost_hat(latency_ms=llm_latency, token_count=tokens)
+        normalised_cost = compute_normalised_cost(latency_ms=llm_latency, token_count=tokens)
         r_score = safety_score(prompt, llm_response)
 
         demand_raw = self._compute_demand_for_prompt(
             embedding_raw=embedding_raw,
             exclude_key=None,  # new item not in cache yet
         )
-        demand_hat = normalize_demand(demand_raw, self._k)
-        s_new = src_score(demand_hat, cost_hat, r_score)
+        normalised_demand = normalize_demand(demand_raw, self._k)
+        s_new = src_score(normalised_demand, normalised_cost, r_score)
 
         logger.debug(
             "Miss  key=%s  Ĉ=%.4f  R=%.2f  D̂=%.4f  S=%.4f",
-            prompt_key[:8], cost_hat, r_score, demand_hat, s_new,
+            prompt_key[:8], normalised_cost, r_score, normalised_demand, s_new,
         )
 
         # ----------------------------------------------------------------
@@ -256,19 +238,18 @@ class SRCSimilarityCache(SimilarityCache):
         # ----------------------------------------------------------------
         if r_score < self._theta_safe:
             logger.debug("Rejected (unsafe R=%.2f)  key=%s", r_score, prompt_key[:8])
-            self._ghost.add(embedding_norm, reason="rejected")
+            self._ghosts.add(embedding_norm, reason="rejected")
             return
 
         # ----------------------------------------------------------------
         # 3. Admit if space is available
         # ----------------------------------------------------------------
-        if self.current_size() < self._max_size:
+        if self.current_size < self._max_size:
             self._admit(
-                prompt=prompt,
                 prompt_key=prompt_key,
                 embedding_raw=embedding_raw,
                 llm_response=llm_response,
-                cost_hat=cost_hat,
+                normalised_cost=normalised_cost,
                 r_score=r_score,
             )
             return
@@ -281,11 +262,10 @@ class SRCSimilarityCache(SimilarityCache):
         if victim_key is None:
             # Cache is empty (shouldn't happen but be safe)
             self._admit(
-                prompt=prompt,
                 prompt_key=prompt_key,
                 embedding_raw=embedding_raw,
                 llm_response=llm_response,
-                cost_hat=cost_hat,
+                normalised_cost=normalised_cost,
                 r_score=r_score,
             )
             return
@@ -297,11 +277,10 @@ class SRCSimilarityCache(SimilarityCache):
             )
             self._evict(victim_key)
             self._admit(
-                prompt=prompt,
                 prompt_key=prompt_key,
                 embedding_raw=embedding_raw,
                 llm_response=llm_response,
-                cost_hat=cost_hat,
+                normalised_cost=normalised_cost,
                 r_score=r_score,
             )
         else:
@@ -309,27 +288,14 @@ class SRCSimilarityCache(SimilarityCache):
                 "Rejected (score too low)  S_new=%.4f  S_victim=%.4f  key=%s",
                 s_new, victim_score, prompt_key[:8],
             )
-            self._ghost.add(embedding_norm, reason="rejected")
-
-    # ------------------------------------------------------------------
-    # current_size (override to satisfy both ICache.current_size and
-    # the property / method dual usage pattern in EchoLLM)
-    # ------------------------------------------------------------------
-
-    def current_size(self) -> int:  # type: ignore[override]
-        return self._responses_db.size()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+            self._ghosts.add(embedding_norm, reason="rejected")
 
     def _admit(
             self,
-            prompt: str,
             prompt_key: str,
             embedding_raw: list[float],
             llm_response: str,
-            cost_hat: float,
+            normalised_cost: float,
             r_score: float,
     ) -> None:
         """Write the item into EchoLLM's DBs and record SRC metadata."""
@@ -347,10 +313,10 @@ class SRCSimilarityCache(SimilarityCache):
         )
         # Store SRC decision metadata (no duplication of prompt/response data)
         self._metadata[prompt_key] = SRCItemMeta(
-            cost_hat=cost_hat,
+            normalised_cost=normalised_cost,
             safety=r_score,
         )
-        logger.debug("Admitted  key=%s  Ĉ=%.4f  R=%.2f", prompt_key[:8], cost_hat, r_score)
+        logger.debug("Admitted  key=%s  Ĉ=%.4f  R=%.2f", prompt_key[:8], normalised_cost, r_score)
 
     def _evict(self, victim_key: str) -> None:
         """Remove *victim_key* from EchoLLM's DBs, SRC metadata, and ghost."""
@@ -372,7 +338,7 @@ class SRCSimilarityCache(SimilarityCache):
 
         # Add ghost entry for the evicted semantic region
         if victim_embedding is not None:
-            self._ghost.add(victim_embedding, reason="evicted")
+            self._ghosts.add(victim_embedding, reason="evicted")
 
     def _find_victim(self) -> tuple[str | None, float]:
         """
@@ -417,8 +383,8 @@ class SRCSimilarityCache(SimilarityCache):
                 embedding_raw=list(raw_vec),
                 exclude_key=key,  # don't count self as a neighbour
             )
-            demand_hat = normalize_demand(demand_raw, self._k)
-            score = src_score(demand_hat, meta.cost_hat, meta.safety)
+            normalised_demand = normalize_demand(demand_raw, self._k)
+            score = src_score(normalised_demand, meta.normalised_cost, meta.safety)
 
             if score < best_victim_score:
                 best_victim_score = score
@@ -462,7 +428,7 @@ class SRCSimilarityCache(SimilarityCache):
 
         # --- Ghost neighbours ---
         # Sample up to k ghost entries for efficiency
-        ghost_entries = self._ghost.entries()
+        ghost_entries = self._ghosts.entries()
         if len(ghost_entries) > self._k:
             ghost_entries = self._rng.sample(ghost_entries, self._k)
 
@@ -474,7 +440,6 @@ class SRCSimilarityCache(SimilarityCache):
             query_embedding=embedding_raw,
             cache_embeddings=cache_embeddings,
             ghost_embeddings=ghost_embeddings,
-            k=self._k,
             theta_near=self._theta_near,
         )
 
@@ -488,7 +453,7 @@ class SRCSimilarityCache(SimilarityCache):
 
     def ghost_size(self) -> int:
         """Return the current number of ghost history entries."""
-        return len(self._ghost)
+        return len(self._ghosts)
 
     def cached_keys(self) -> list[str]:
         """Return a list of all currently cached prompt keys."""

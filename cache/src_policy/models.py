@@ -23,7 +23,7 @@ class SRCItemMeta:
 
     Attributes
     ----------
-    cost_hat : float
+    normalised_cost : float
         Normalised saved-generation-cost score  Ĉ_i ∈ [0, 1).
         Computed once at admission from (latency, token_count).
     safety : float
@@ -31,12 +31,12 @@ class SRCItemMeta:
         Computed once at admission using deterministic heuristics.
     """
 
-    cost_hat: float  # Ĉ_i  ∈ [0, 1)
+    normalised_cost: float  # Ĉ_i  ∈ [0, 1)
     safety: float  # R_i  ∈ [0, 1]
 
     def __post_init__(self) -> None:
-        if not (0.0 <= self.cost_hat < 1.0):
-            raise ValueError(f"cost_hat must be in [0, 1), got {self.cost_hat}")
+        if not (0.0 <= self.normalised_cost < 1.0):
+            raise ValueError(f"cost_hat must be in [0, 1), got {self.normalised_cost}")
         if not (0.0 <= self.safety <= 1.0):
             raise ValueError(f"safety must be in [0, 1], got {self.safety}")
 
