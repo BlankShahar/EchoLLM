@@ -1,1 +1,3 @@
-from .similarity_cache import SimilarityCache
+from .ranking_distance_method import RankingDistanceMethod
+
+__all__ = ["RankingDistanceMethod"]

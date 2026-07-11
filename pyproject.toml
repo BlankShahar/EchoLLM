@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "echollm-sage"
+version = "0.1.0"
+description = "SAGE semantic admission and gain-based eviction for EchoLLM"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+  "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+experiments = [
+  "datasets>=2.19",
+  "matplotlib>=3.8",
+  "pandas>=2.2",
+  "pyarrow>=16",
+  "PyYAML>=6",
+  "scikit-learn>=1.4",
+  "sentence-transformers>=3.0",
+]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["cache*", "echollm*", "experiments*", "llm*", "text_similarity*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,46 @@
+dataset:
+  source: huggingface
+  dataset_name: OpenAssistant/oasst1
+  split: train
+  language: en
+  max_pairs: 20000
+  response_selection: top_rank
+
+embedding:
+  prompt_model_name: sentence-transformers/all-MiniLM-L6-v2
+  quality_model_name: sentence-transformers/all-mpnet-base-v2
+  batch_size: 128
+  device: null
+  cache_path: .cache/echollm_embeddings.sqlite3
+
+trace:
+  mode: zipf_clustered
+  request_count: 50000
+  warmup_requests: 5000
+  seed: 7
+  zipf_alpha: 1.1
+  cluster_count: 1000
+
+latency:
+  mode: linear_tokens
+  fixed_ms: 1000.0
+  base_ms: 100.0
+  prompt_token_ms: 2.0
+  response_token_ms: 8.0
+
+policy:
+  policies: [LRU, LFU, FIFO, RR, SAGE]
+  cache_sizes: [50, 100, 250, 500, 1000]
+  hit_distance_threshold: 0.18
+  sage_ghost_capacity: 4096
+  sage_decay_half_life_requests: 10000
+  sage_admission_margin: 0.0
+
+quality:
+  good_hit_distance_thresholds: [0.1, 0.2, 0.3]
+
+output:
+  directory: results
+  run_name: oasst1_sage
+  write_raw_results: true
+  generate_plots: true

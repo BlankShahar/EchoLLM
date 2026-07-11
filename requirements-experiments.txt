@@ -1,0 +1,9 @@
+-r requirements.txt
+datasets>=2.19
+matplotlib>=3.8
+pandas>=2.2
+pyarrow>=16
+PyYAML>=6
+scikit-learn>=1.4
+sentence-transformers>=3.0
+pytest>=8

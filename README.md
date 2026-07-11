@@ -1,171 +1,119 @@
-# 🌌 EchoLLM
+# EchoLLM SAGE feature branch
 
-> **EchoLLM** — a lightweight, flexible, and **beautifully simple** framework for Large Language Model (LLM)
-> applications.  
-> It combines **smart similarity caching**, a **plug-and-play architecture**, and a **super easy API** to make
-> LLM-powered systems practical, efficient, and fun to build.
+This package adds **SAGE — Semantic Admission and Gain-based Eviction** to EchoLLM and includes a reproducible OASST1 experiment harness.
 
----
+SAGE treats a semantic cache as a set of overlapping coverage regions. It records a bounded ghost window of recent request embeddings and admits a missed prompt only when replacing a resident strictly increases recency-weighted semantic coverage.
 
-## 🚀 Motivation
+## Included changes
 
-Why another LLM framework?  
-Because most frameworks either feel **bloated and rigid** or **too barebones to be useful**.  
-With EchoLLM, our key contributions are:
+- `cache/models.py`: Pydantic `CacheLookup` result.
+- `cache/icache.py`: backward-compatible `lookup()` API.
+- `echollm/echollm.py`: one-pass lookup and lookup-context propagation.
+- `cache/sage/`: policy, exact distance engine, ghost window, vectorized scorer, persistence, Pydantic models/configuration.
+- `cache/sage_similarity_cache.py`: convenient import compatible with EchoLLM's flat policy modules.
+- `experiments/`: OASST1 loader, trace generation, exact semantic baselines, response-quality evaluation, raw CSV output, summaries, and plots.
+- `tests/`: mathematical equivalence, policy behavior, persistence, framework flow, dataset selection, and metric tests.
 
-1. **Smart Similarity Cache** — repeated or similar prompts don’t need to hit the model again. We integrate
-   similarity–based caching **directly into the LLM call layer**, saving money, latency, and making caching
-   *first-class* instead of an afterthought.
-2. **Minimal, Simple Framework** — one of the easiest APIs for LLMs you’ll find. Import, call, get results. Done.
-3. **Extreme Flexibility** — every component (cache algorithm, LLM backend, distance metric, database, etc.) is *
-   *replaceable and swappable**. Want to test a custom cache policy? Just drop it in. Want to try a different LLM
-   provider or similarity function? Plug it in with no friction.
-4. **Super Easy API** — clear, minimal, Pythonic. No boilerplate, no YAML jungles, no “hidden magic.” You stay in
-   control.
+The package is organized as a feature-branch overlay: copy its changed/new modules over an EchoLLM checkout, or use this self-contained core directly for policy and experiment work. Existing policies remain compatible because `ICache.lookup()` falls back to their original `is_hit()`/`on_hit()` methods.
 
----
+## Install
 
-## ✨ Features
-
-- 🔄 **Smart similarity cache** with pluggable policies.
-- 🧩 **Composable framework** — swap LLMs, databases, distance metrics, or cache strategies effortlessly.
-- 🪶 **Tiny API surface** — learn it in minutes.
-- ⚡ **Fast prototyping** — go from idea → working code with almost no setup.
-- 📦 **Production-ready** — caching, similarity search, modularity baked in.
-- 📚 **Extensible design** — each layer is cleanly separated.
-
----
-
-## 📐 Architecture
-
-EchoLLM is built around **clean modular components**:
-
-![System UML Diagram](EchoLLM-Design.png)
-
-- **EchoLLM**: the framework's entrypoint.
-- **LLM Backend**: pluggable provider (OpenAI, local models, etc.).
-- **Cache Manager**: integrates *smart similarity* for reusing close-enough results.
-- **Storage Client**: handles persistence (databases, file system, or pluggable storage backends).
-- **Text Similarity**: pluggable text (prompt) embedders and vector distance metrics for calculating similarities
-  between requests.
-
----
-
-## 📦 Installation
+Core policy:
 
 ```bash
-git clone https://github.com/BlankShahar/EchoLLM.git
-cd EchoLLM
-python -m venv .venv && source .venv/bin/activate   # (Windows: .venv\Scripts\activate)
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
----
+Full OASST1 experiments:
 
-## ⚡ Toy Code Example
+```bash
+python -m pip install -r requirements-experiments.txt
+```
 
+Python 3.11+ is recommended.
 
-### Smart Similarity Cache
+## Minimal use
 
 ```python
+from cache.sage import SAGESimilarityCache
+from cache.similarity_cache import RankingDistanceMethod
 from echollm import EchoLLM
 
-echo_llm = EchoLLM(cache=SimilarityCache(...), llm=...)
+cache = SAGESimilarityCache(
+    max_size=1_000,
+    hit_distance_threshold=0.18,
+    prompt_embedder=my_embedding_function,
+    ranking_distance_method=RankingDistanceMethod.COSINE,
+    ghost_capacity=4_096,
+    decay_half_life_requests=10_000,
+    storage_path=".cache/sage.sqlite3",
+    storage_namespace="production-v1",
+)
 
-# First call: misses the cache, hits the LLM
-res1 = echo_llm.ask("What is an echo?")
-print(res1)
-
-# Second call: retrieved instantly from similarity cache (no LLM's API cost)
-res2 = echo_llm.ask("What’s an echo?")
-print(res2)
-```
-Check out the full example usage in [example_usage.py](./_example.py) module.
-Here's an output example:
-```shell
->>> ask('Write me a short script of calculator in python')
-INFO:EchoLLM:Cache Miss
-INFO:EchoLLM:LLM response took 10156.13ms
-INFO:httpx:HTTP Request: POST http://localhost:11434/api/pull "HTTP/1.1 200 OK"
-python
-def calculator():
-  """A simple calculator in Python."""
-...
--------------
->>> ask('Make a simple calculator in python')
-INFO:EchoLLM:Cache Hit
-python
-def calculator():
-  """A simple calculator in Python."""
-...
--------------
->>> ask('Hi')
-INFO:EchoLLM:Cache Miss
-INFO:httpx:HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
-INFO:EchoLLM:LLM response took 8586.60ms
-Hey there! How’s your day going so far? 😊 
-...
-```
----
-
-## 📂 Project Structure
-
-```
-EchoLLM/
-├─ cache/                 # Cache algorithm implemenations
-├─ llm/                   # LLM backends
-├─ text_similarity/       # Embeddings + similarity (vector distance) logic
-├─ echo_llm.py            # Main EchoLLM API
-├─ _example.py            # Demo script with toy examples and usage showcase
-└─ requirements.txt       # Dependencies
+echo = EchoLLM(cache=cache, llm=my_llm)
+answer = echo.ask("How can I reset my password?")
 ```
 
----
+`prompt_embedder` must accept a string and return one numeric vector. The response does not influence SAGE-HR's admission score; the policy objective is semantic hit coverage only.
 
+## Run tests
 
-## 🛣️ Roadmap
+```bash
+PYTHONPATH=. pytest -q
+```
 
-- ✅ Core framework & cache
-- 🚧 More sophisticated cache algorithms
-- 🚧 More LLM backends (Anthropic, local models, HuggingFace)
-- 🚧 Optional Redis/Postgres cache storage implementations
-- 🚧 More similarity metrics out-of-the-box
-- 🚧 Tracing & observability hooks
+## Run a deterministic smoke experiment
 
----
+```bash
+PYTHONPATH=. python -m experiments.smoke
+```
 
-### 🧠 Supported Cache Policies
+This produces raw per-request files, `summary.csv`, `summary.json`, and plots under `results/smoke/`.
 
-| Policy | Notes |
-|-------|-------|
-| 🔹 **LRU** | Standard least-recently-used eviction |
-| 🔸 **LFU** | Tracks usage frequency to guide eviction |
-| 🔹 **FIFO** | First-in-first-out queue behavior |
-| 🔸 **RR** | Random replacement eviction |
-| 🚀 **Adaptive Pipeline Cache** | [External implementation](https://github.com/NadavKeren/python-adaptive-pipeline-cache) – adaptive & workload-aware |
+## Run OASST1
 
-## 🤝 Contributing
+```bash
+PYTHONPATH=. python -m experiments.run \
+  --config experiments/configs/oasst1_default.yaml
+```
 
-PRs welcome!
+Outputs are written to `results/oasst1_sage/` by default:
 
-- Keep things minimal and pluggable.
-- Add docstrings & tests.
-- Run `_example.py` before submitting.
+```text
+results/oasst1_sage/
+├── config.json
+├── summary.csv
+├── summary.json
+├── raw/*.csv.gz
+└── plots/*.png
+```
 
----
+Regenerate plots without rerunning the trace:
 
-## 📜 License
+```bash
+PYTHONPATH=. python -m experiments.plot \
+  --results-dir results/oasst1_sage
+```
 
-TBD.
+## Main experimental metrics
 
----
+- **Semantic hit rate**: all semantic cache hits divided by all measured requests.
+- **Hit-only response cosine distance**: cosine distance between the returned cached response and the OASST1 reference response for that request.
+- **Quality-adjusted hit rate at threshold `t`**: hits whose response distance is at most `t`, divided by **all** measured requests.
+- **Bad-hit rate at threshold `t`**: hits whose distance exceeds `t`, divided by all measured requests.
+- **Mean simulated latency**: cache overhead plus a configurable miss-latency model.
+- **Mean policy overhead**: measured local lookup/admission runtime.
 
-## 💡 Inspiration
+The quality-adjusted hit rate is the central anti-reward-hacking metric. Hit rate alone rewards overly permissive matching; hit-only response distance alone can reward a policy that serves only a few easy hits. Their joint metric rewards many hits only when those hits return a sufficiently similar answer.
 
-EchoLLM was inspired by prior work on caching for LLMs, such as [GPTCache](https://github.com/zilliztech/GPTCache), which demonstrated the value of avoiding redundant API calls by reusing previous responses.  
+Prompt embeddings and response-quality embeddings use separate configurable models by default. This avoids directly evaluating answer quality in the same vector space that drives cache matching.
 
-Our name **EchoLLM** comes from this very idea:  
-we integrate a **caching framework as the frontend**, placed before the LLM backend.  
-Whenever a cache hit occurs (e.g., for similar prompts), the cache simply **“echoes” the previous LLM response**, saving both cost and latency.  
+## Important fairness choices
 
-In this way, EchoLLM emphasizes that the cache is not just a side optimization, but a **first-class design principle** in the system.
+- Every policy uses the same exact resident scan, prompt embedding model, distance function, hit threshold, trace, cache capacity, and warm-up.
+- Baselines are LRU, LFU, FIFO, and random replacement.
+- Misses return the OASST1 reference response, so their response distance is zero in the optional end-to-end metric. Therefore, end-to-end response distance must not be interpreted without hit rate.
+- Raw results record each hit, prompt distance, response distance, estimated LLM latency, policy overhead, and SAGE admission delta.
+- `response_selection: top_rank` avoids ambiguity from evaluating the same prompt against several valid OASST1 answers.
+
+See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) and [`experiments/README.md`](experiments/README.md) for the detailed design and methodology.

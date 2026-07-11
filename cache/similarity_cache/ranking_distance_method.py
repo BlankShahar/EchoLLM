@@ -1,7 +1,7 @@
-from enum import Enum, auto
+from enum import StrEnum
 
 
-class RankingDistanceMethod(Enum):
-    EUCLIDEAN = auto()
-    MANHATTAN = auto()
-    COSINE = auto() # Note: Max distance is 1
+class RankingDistanceMethod(StrEnum):
+    EUCLIDEAN = "euclidean"
+    MANHATTAN = "manhattan"
+    COSINE = "cosine"
