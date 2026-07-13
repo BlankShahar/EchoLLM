@@ -78,7 +78,7 @@ export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export PYTHONUNBUFFERED=1
 
-CONFIG_PATH="$CODE_PATH/experiments/configs/oasst1_default.yaml"
+CONFIG_PATH="$CODE_PATH/_experiments/configs/oasst1_default.yaml"
 
 export OLLAMA_GPU_LAYERS=9999
 export OLLAMA_FLASH_ATTENTION=1
@@ -109,7 +109,7 @@ echo "Checking PyTorch CUDA access..."
 srun python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 
 echo "Running all policy/capacity experiments..."
-srun python -m _experiments.run \
+srun python -m "$EXPERIMENT_MODULE.run" \
   --config "$CONFIG_PATH" \
   --model "$MODEL" \
   --device cuda \
