@@ -1,4 +1,6 @@
-from experiments.metrics import MetricsAccumulator, RequestObservation
+import math
+
+from _experiments.metrics import MetricsAccumulator, RequestObservation
 
 
 def test_quality_adjusted_hit_rate_uses_all_requests_as_denominator() -> None:
@@ -25,6 +27,7 @@ def test_quality_adjusted_hit_rate_uses_all_requests_as_denominator() -> None:
         RequestObservation(
             measured=True,
             hit=False,
+            response_cosine_distance=0.2,
             total_latency_ms=10.0,
             policy_overhead_ms=1.0,
         )
@@ -33,3 +36,7 @@ def test_quality_adjusted_hit_rate_uses_all_requests_as_denominator() -> None:
     assert summary.hit_rate == 2 / 3
     assert summary.quality_adjusted_hit_rates["0.2"] == 1 / 3
     assert summary.bad_hit_rates["0.2"] == 1 / 3
+    assert math.isclose(summary.p95_latency_ms, 9.1)
+    assert math.isclose(summary.p99_latency_ms, 9.82)
+    assert math.isclose(summary.policy_throughput_qps or 0.0, 1000.0)
+    assert math.isclose(summary.sequential_end_to_end_throughput_qps or 0.0, 250.0)

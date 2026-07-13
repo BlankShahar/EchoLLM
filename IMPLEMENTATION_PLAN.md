@@ -157,6 +157,11 @@ Automated tests cover:
 7. one embedding per EchoLLM request;
 8. OASST1 best-ranked response selection;
 9. quality-adjusted metric denominator.
+10. exact best-delta victim selection;
+11. full chronological trace construction;
+12. zero and automatically resolved unbounded capacities;
+13. framework-native `ILLM.ask()` latency and latency percentiles;
+14. identical memoized `LLMResponse` replay across policies.
 
 Recommended additional large-run checks:
 
@@ -164,5 +169,5 @@ Recommended additional large-run checks:
 - ghost-capacity sensitivity;
 - admission-margin sensitivity;
 - exact versus sampled ghost scoring;
-- repeated multi-seed results with confidence intervals;
+- full chronological OASST1 runs from zero through unbounded capacity;
 - response-quality evaluation with at least one independent evaluator model.

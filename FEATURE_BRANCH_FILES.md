@@ -3,11 +3,13 @@
 ## Modified EchoLLM framework files
 
 - `cache/icache.py` — adds backward-compatible `lookup()`.
-- `echollm/echollm.py` — consumes `CacheLookup` and forwards miss context.
+- `echollm/echollm.py` — consumes `CacheLookup`, forwards miss context, and exposes request measurements.
+- `llm/ollama_llm.py` — accepts configured model names through the existing `ILLM` implementation.
 
 ## New framework files
 
 - `cache/models.py`
+- `echollm/models.py`
 - `cache/sage_similarity_cache.py`
 - `cache/sage/__init__.py`
 - `cache/sage/cache.py`
@@ -25,14 +27,16 @@
 - `experiments/embeddings.py`
 - `experiments/trace.py`
 - `experiments/baselines.py`
-- `experiments/latency.py`
+- `experiments/llm.py`
 - `experiments/metrics.py`
+- `experiments/resources.py`
 - `experiments/runner.py`
 - `experiments/plotting.py`
 - `experiments/run.py`
 - `experiments/plot.py`
 - `experiments/smoke.py`
 - `experiments/configs/oasst1_default.yaml`
+- `experiments/slurm/run_oasst1.sbatch`
 
 ## Validation
 

@@ -2,23 +2,30 @@ import csv
 import gzip
 import json
 from pathlib import Path
-from time import perf_counter_ns
 
 import numpy as np
 import pandas as pd
 
+from cache import ICache
 from cache.sage import SAGESimilarityCache
 from cache.similarity_cache import RankingDistanceMethod
+from echollm import EchoLLM
+from llm import ILLM
 from text_similarity.vector_utils import cosine_distance
 
 from .baselines import BaselineKind, ExactSemanticBaselineCache
 from .config import ExperimentConfig
-from .embeddings import PrecomputedEmbedder, SentenceTransformerEmbeddingProvider
-from .latency import LatencyModel
+from .embeddings import (
+    EmbeddingProvider,
+    PrecomputedEmbedder,
+    SentenceTransformerEmbeddingProvider,
+)
+from .llm import MemoizedLLM, ReferenceLLM, build_llm
 from .metrics import MetricsAccumulator, RequestObservation, RunSummary
 from .models import PromptResponsePair, TraceRequest
 from .oasst1 import load_oasst1_pairs
 from .plotting import generate_plots
+from .resources import ResourceTracker, ResourceUsage
 from .trace import build_trace
 
 
@@ -29,8 +36,14 @@ class ExperimentRunner:
         pairs: list[PromptResponsePair],
         prompt_embeddings: np.ndarray,
         response_embeddings: np.ndarray,
+        *,
+        llm: ILLM | None = None,
+        quality_provider: EmbeddingProvider | None = None,
     ) -> None:
-        if len(pairs) != prompt_embeddings.shape[0] or len(pairs) != response_embeddings.shape[0]:
+        if (
+            len(pairs) != prompt_embeddings.shape[0]
+            or len(pairs) != response_embeddings.shape[0]
+        ):
             raise ValueError("Pairs and embedding matrices must have identical row counts")
         self.config = config
         self.pairs = pairs
@@ -44,7 +57,11 @@ class ExperimentRunner:
             for index, pair in enumerate(pairs)
         }
         self._prompt_embedder = PrecomputedEmbedder(self._prompt_vectors)
-        self._latency_model = LatencyModel(config.latency)
+        backend = llm or ReferenceLLM(
+            {pair.prompt: pair.reference_response for pair in pairs}
+        )
+        self._llm = MemoizedLLM(backend)
+        self._quality_provider = quality_provider
         self._trace = build_trace(pairs, self.prompt_embeddings, config.trace)
 
     @classmethod
@@ -62,7 +79,14 @@ class ExperimentRunner:
         response_embeddings = quality_provider.embed_many(
             [pair.reference_response for pair in pairs]
         )
-        return cls(config, pairs, prompt_embeddings, response_embeddings)
+        return cls(
+            config,
+            pairs,
+            prompt_embeddings,
+            response_embeddings,
+            llm=build_llm(config.llm),
+            quality_provider=quality_provider,
+        )
 
     def run(self) -> Path:
         run_directory = self.config.output.directory / self.config.output.run_name
@@ -73,11 +97,17 @@ class ExperimentRunner:
         (run_directory / "config.json").write_text(
             self.config.model_dump_json(indent=2), encoding="utf-8"
         )
+        self._prepare_llm_responses()
 
         summaries: list[RunSummary] = []
-        for cache_size in self.config.policy.cache_sizes:
+        for cache_size, capacity_mode in self._capacity_runs():
             for policy_name in self.config.policy.policies:
-                summary = self._run_one(policy_name, cache_size, raw_directory)
+                summary = self._run_one(
+                    policy_name,
+                    cache_size,
+                    capacity_mode,
+                    raw_directory,
+                )
                 summaries.append(summary)
 
         flat_rows = [summary.flat_dict() for summary in summaries]
@@ -91,82 +121,107 @@ class ExperimentRunner:
             generate_plots(run_directory)
         return run_directory
 
-    def _run_one(self, policy_name: str, cache_size: int, raw_directory: Path) -> RunSummary:
+    def _run_one(
+        self,
+        policy_name: str,
+        cache_size: int,
+        capacity_mode: str,
+        raw_directory: Path,
+    ) -> RunSummary:
         cache = self._build_cache(policy_name, cache_size)
+        echo_llm = EchoLLM(cache=cache, llm=self._llm)
         accumulator = MetricsAccumulator(self.config.quality.good_hit_distance_thresholds)
+        resource_tracker = ResourceTracker(self.config.resources)
+        resource_usage: ResourceUsage | None = None
         raw_handle = None
         writer = None
         try:
             if self.config.output.write_raw_results:
-                raw_path = raw_directory / f"{policy_name.lower()}_cache_{cache_size}.csv.gz"
+                capacity_label = (
+                    f"unbounded_{cache_size}"
+                    if capacity_mode == "unbounded"
+                    else str(cache_size)
+                )
+                raw_path = (
+                    raw_directory
+                    / f"{policy_name.lower()}_cache_{capacity_label}.csv.gz"
+                )
                 raw_handle = gzip.open(raw_path, mode="wt", encoding="utf-8", newline="")
                 writer = csv.DictWriter(raw_handle, fieldnames=_RAW_FIELDS)
                 writer.writeheader()
 
             for request in self._trace:
-                started = perf_counter_ns()
-                lookup = cache.lookup(request.prompt)
+                measured = request.request_index >= self.config.trace.warmup_requests
+                if measured:
+                    resource_tracker.start()
+
+                result = echo_llm.ask_with_metadata(request.prompt)
+                policy_overhead_ms = result.cache_latency
                 decision_payload: dict[str, object] = {
                     "candidate_admitted": "",
                     "admission_net_delta": "",
                 }
-                if lookup.hit:
-                    returned_response = str(lookup.response)
-                    llm_latency_ms = 0.0
-                    response_distance = self._response_distance(
-                        returned_response, request.reference_response
-                    )
-                else:
-                    returned_response = request.reference_response
-                    llm_latency_ms = self._latency_model.estimate_ms(
-                        request.prompt, request.reference_response
-                    )
-                    cache.on_miss(
-                        request.prompt,
-                        request.reference_response,
-                        llm_latency=llm_latency_ms,
-                        lookup_context=lookup.context,
-                    )
-                    response_distance = None
-                    if isinstance(cache, SAGESimilarityCache) and cache.last_decision is not None:
+                response_distance = self._response_distance(
+                    result.response, request.reference_response
+                )
+                if not result.cache_hit:
+                    if (
+                        isinstance(cache, SAGESimilarityCache)
+                        and cache.last_decision is not None
+                    ):
                         decision_payload = {
                             "candidate_admitted": cache.last_decision.admitted,
                             "admission_net_delta": cache.last_decision.net_delta,
                         }
 
-                overhead_ms = (perf_counter_ns() - started) / 1_000_000.0
-                total_latency_ms = overhead_ms + llm_latency_ms
-                measured = request.request_index >= self.config.trace.warmup_requests
+                total_latency_ms = policy_overhead_ms + result.llm_latency
                 observation = RequestObservation(
                     measured=measured,
-                    hit=lookup.hit,
+                    hit=result.cache_hit,
                     response_cosine_distance=response_distance,
                     total_latency_ms=total_latency_ms,
-                    policy_overhead_ms=overhead_ms,
+                    policy_overhead_ms=policy_overhead_ms,
                 )
                 accumulator.record(observation)
+                if measured:
+                    measured_index = (
+                        request.request_index
+                        - self.config.trace.warmup_requests
+                        + 1
+                    )
+                    resource_tracker.sample(measured_index)
 
                 if writer is not None:
                     writer.writerow(
                         {
                             "request_index": request.request_index,
                             "measured": measured,
+                            "created_at": (
+                                request.created_at.isoformat()
+                                if request.created_at is not None
+                                else ""
+                            ),
                             "pair_index": request.pair_index,
                             "prompt_id": request.prompt_id,
                             "response_id": request.response_id,
                             "policy": policy_name,
                             "cache_size": cache_size,
-                            "hit": lookup.hit,
-                            "prompt_distance": lookup.metadata.get("prompt_distance", ""),
-                            "response_cosine_distance": (
-                                response_distance if response_distance is not None else ""
+                            "capacity_mode": capacity_mode,
+                            "llm_model": self.config.llm.model,
+                            "hit": result.cache_hit,
+                            "prompt_distance": result.cache_metadata.get(
+                                "prompt_distance", ""
                             ),
-                            "simulated_llm_latency_ms": llm_latency_ms,
-                            "policy_overhead_ms": overhead_ms,
+                            "response_cosine_distance": response_distance,
+                            "backend_latency_ms": result.llm_latency,
+                            "policy_overhead_ms": policy_overhead_ms,
                             "total_latency_ms": total_latency_ms,
                             **decision_payload,
                         }
                     )
+            resource_usage = resource_tracker.finish(
+                len(self._trace) - self.config.trace.warmup_requests
+            )
         finally:
             if raw_handle is not None:
                 raw_handle.close()
@@ -174,9 +229,17 @@ class ExperimentRunner:
             if callable(close):
                 close()
 
-        return accumulator.summary(policy_name, cache_size)
+        return accumulator.summary(
+            policy_name,
+            cache_size,
+            capacity_mode=capacity_mode,
+            llm_model=self.config.llm.model,
+            resource_usage=resource_usage,
+        )
 
-    def _build_cache(self, policy_name: str, cache_size: int):
+    def _build_cache(self, policy_name: str, cache_size: int) -> ICache | None:
+        if cache_size == 0:
+            return None
         common = {
             "max_size": cache_size,
             "hit_distance_threshold": self.config.policy.hit_distance_threshold,
@@ -197,6 +260,26 @@ class ExperimentRunner:
             seed=self.config.trace.seed,
         )
 
+    def _capacity_runs(self) -> list[tuple[int, str]]:
+        runs: list[tuple[int, str]] = []
+        seen: set[int] = set()
+        for cache_size in self.config.policy.cache_sizes:
+            if cache_size in seen:
+                continue
+            seen.add(cache_size)
+            runs.append((cache_size, "no_cache" if cache_size == 0 else "bounded"))
+
+        if self.config.policy.include_unbounded_cache:
+            unbounded_size = len({request.prompt for request in self._trace})
+            if unbounded_size in seen:
+                runs = [
+                    (size, "unbounded" if size == unbounded_size else mode)
+                    for size, mode in runs
+                ]
+            else:
+                runs.append((unbounded_size, "unbounded"))
+        return runs
+
     def _response_distance(self, returned: str, reference: str) -> float:
         returned_vector = self._response_vectors.get(returned)
         reference_vector = self._response_vectors.get(reference)
@@ -204,19 +287,39 @@ class ExperimentRunner:
             raise KeyError("Response embedding missing from the precomputed experiment set")
         return cosine_distance(tuple(returned_vector), tuple(reference_vector))
 
+    def _prepare_llm_responses(self) -> None:
+        self._llm.prime(request.prompt for request in self._trace)
+        generated = [response.response for response in self._llm.responses.values()]
+        missing = list(
+            dict.fromkeys(
+                response
+                for response in generated
+                if response not in self._response_vectors
+            )
+        )
+        if not missing:
+            return
+        if self._quality_provider is None:
+            raise KeyError("Generated responses require a quality embedding provider")
+        vectors = self._quality_provider.embed_many(missing)
+        self._response_vectors.update(zip(missing, vectors, strict=True))
+
 
 _RAW_FIELDS = [
     "request_index",
     "measured",
+    "created_at",
     "pair_index",
     "prompt_id",
     "response_id",
     "policy",
     "cache_size",
+    "capacity_mode",
+    "llm_model",
     "hit",
     "prompt_distance",
     "response_cosine_distance",
-    "simulated_llm_latency_ms",
+    "backend_latency_ms",
     "policy_overhead_ms",
     "total_latency_ms",
     "candidate_admitted",

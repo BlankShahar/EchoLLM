@@ -3,10 +3,15 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from threading import RLock
+from typing import Protocol
 
 import numpy as np
 
 from .config import EmbeddingConfig
+
+
+class EmbeddingProvider(Protocol):
+    def embed_many(self, texts: Sequence[str]) -> np.ndarray: ...
 
 
 class SQLiteEmbeddingCache:
@@ -61,7 +66,7 @@ class SentenceTransformerEmbeddingProvider:
         except ImportError as error:
             raise RuntimeError(
                 "The `sentence-transformers` package is required. "
-                "Install requirements-experiments.txt."
+                "Install requirements-_experiments.txt."
             ) from error
         self._model = SentenceTransformer(model_name, device=config.device)
 

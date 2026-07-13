@@ -121,3 +121,15 @@ def test_euclidean_distance_is_supported() -> None:
     )
     _miss(cache, "a", "answer")
     assert cache.lookup("near").hit
+
+
+def test_victim_selection_uses_the_exact_best_delta() -> None:
+    cache = SAGESimilarityCache(
+        max_size=2,
+        hit_distance_threshold=0.05,
+        prompt_embedder=lambda _: [1.0, 0.0],
+    )
+    cache._active[:] = True
+    cache._last_access_steps[:] = [0, 10]
+
+    assert cache._choose_victim(np.asarray([1.0, 1.000005])) == 1

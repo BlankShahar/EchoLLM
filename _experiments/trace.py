@@ -11,21 +11,37 @@ def build_trace(
 ) -> list[TraceRequest]:
     if prompt_embeddings.shape[0] != len(pairs):
         raise ValueError("prompt_embeddings must align with pairs")
+    if not pairs:
+        raise ValueError("pairs must not be empty")
+    request_count = config.request_count or len(pairs)
+    if config.warmup_requests >= request_count:
+        raise ValueError("warmup_requests must be smaller than the effective request count")
     rng = np.random.default_rng(config.seed)
 
     if config.mode == TraceMode.DATASET_ORDER:
-        indices = np.arange(config.request_count, dtype=np.int64) % len(pairs)
+        indices = np.arange(request_count, dtype=np.int64) % len(pairs)
+    elif config.mode == TraceMode.CHRONOLOGICAL:
+        chronological = np.asarray(
+            sorted(range(len(pairs)), key=lambda index: _chronological_sort_key(pairs[index])),
+            dtype=np.int64,
+        )
+        indices = np.resize(chronological, request_count)
     elif config.mode == TraceMode.SHUFFLED:
         base = np.arange(len(pairs), dtype=np.int64)
         chunks: list[np.ndarray] = []
-        remaining = config.request_count
+        remaining = request_count
         while remaining > 0:
             shuffled = rng.permutation(base)
             chunks.append(shuffled[:remaining])
             remaining -= min(remaining, len(base))
         indices = np.concatenate(chunks)
     elif config.mode == TraceMode.ZIPF_CLUSTERED:
-        indices = _build_zipf_clustered_indices(prompt_embeddings, config, rng)
+        indices = _build_zipf_clustered_indices(
+            prompt_embeddings,
+            config,
+            rng,
+            request_count=request_count,
+        )
     else:
         raise ValueError(f"Unsupported trace mode: {config.mode}")
 
@@ -40,6 +56,7 @@ def build_trace(
                 response_id=pair.response_id,
                 prompt=pair.prompt,
                 reference_response=pair.reference_response,
+                created_at=pair.created_at,
             )
         )
     return trace
@@ -49,6 +66,8 @@ def _build_zipf_clustered_indices(
     embeddings: np.ndarray,
     config: TraceConfig,
     rng: np.random.Generator,
+    *,
+    request_count: int,
 ) -> np.ndarray:
     try:
         from sklearn.cluster import MiniBatchKMeans
@@ -58,7 +77,7 @@ def _build_zipf_clustered_indices(
     normalized = _normalize_rows(embeddings)
     cluster_count = min(config.cluster_count, normalized.shape[0])
     if cluster_count < 2:
-        return np.zeros(config.request_count, dtype=np.int64)
+        return np.zeros(request_count, dtype=np.int64)
 
     model = MiniBatchKMeans(
         n_clusters=cluster_count,
@@ -79,11 +98,11 @@ def _build_zipf_clustered_indices(
 
     selected_clusters = rng.choice(
         len(non_empty),
-        size=config.request_count,
+        size=request_count,
         replace=True,
         p=probabilities,
     )
-    result = np.empty(config.request_count, dtype=np.int64)
+    result = np.empty(request_count, dtype=np.int64)
     for index, cluster_index in enumerate(selected_clusters):
         cluster = non_empty[int(cluster_index)]
         result[index] = int(rng.choice(cluster))
@@ -94,3 +113,8 @@ def _normalize_rows(matrix: np.ndarray) -> np.ndarray:
     matrix = np.asarray(matrix, dtype=np.float32)
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     return matrix / np.where(norms == 0.0, 1.0, norms)
+
+
+def _chronological_sort_key(pair: PromptResponsePair) -> tuple[bool, float, int, int]:
+    timestamp = pair.created_at.timestamp() if pair.created_at is not None else float("inf")
+    return pair.created_at is None, timestamp, pair.source_index, pair.pair_index

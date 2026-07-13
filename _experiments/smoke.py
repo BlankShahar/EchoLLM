@@ -4,6 +4,7 @@ import numpy as np
 
 from .config import (
     ExperimentConfig,
+    LLMConfig,
     OutputConfig,
     PolicyConfig,
     QualityConfig,
@@ -67,6 +68,7 @@ def build_synthetic_workload(seed: int = 11) -> tuple[list[PromptResponsePair], 
 def main() -> None:
     pairs, prompt_embeddings, response_embeddings = build_synthetic_workload()
     config = ExperimentConfig(
+        llm=LLMConfig(model="reference"),
         trace=TraceConfig(
             mode=TraceMode.DATASET_ORDER,
             request_count=len(pairs),
@@ -76,6 +78,7 @@ def main() -> None:
         policy=PolicyConfig(
             policies=["LRU", "LFU", "FIFO", "RR", "SAGE"],
             cache_sizes=[3, 5, 8],
+            include_unbounded_cache=False,
             hit_distance_threshold=0.08,
             sage_ghost_capacity=128,
             sage_decay_half_life_requests=96,

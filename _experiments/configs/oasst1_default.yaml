@@ -1,9 +1,9 @@
 dataset:
   source: huggingface
   dataset_name: OpenAssistant/oasst1
-  split: train
+  split: [train, validation]
   language: en
-  max_pairs: 20000
+  max_pairs: null
   response_selection: top_rank
 
 embedding:
@@ -14,23 +14,24 @@ embedding:
   cache_path: .cache/echollm_embeddings.sqlite3
 
 trace:
-  mode: zipf_clustered
-  request_count: 50000
-  warmup_requests: 5000
+  mode: chronological
+  request_count: null
+  warmup_requests: 0
   seed: 7
   zipf_alpha: 1.1
   cluster_count: 1000
 
-latency:
-  mode: linear_tokens
-  fixed_ms: 1000.0
-  base_ms: 100.0
-  prompt_token_ms: 2.0
-  response_token_ms: 8.0
+llm:
+  provider: ollama
+  model: llama3.2:1b
+  host: http://127.0.0.1:11434
+  options:
+    num_predict: 256
 
 policy:
   policies: [LRU, LFU, FIFO, RR, SAGE]
-  cache_sizes: [50, 100, 250, 500, 1000]
+  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+  include_unbounded_cache: true
   hit_distance_threshold: 0.18
   sage_ghost_capacity: 4096
   sage_decay_half_life_requests: 10000
@@ -38,6 +39,10 @@ policy:
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]
+
+resources:
+  enabled: true
+  sample_interval_requests: 100
 
 output:
   directory: results

@@ -4,6 +4,8 @@ from collections.abc import Sequence
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from .resources import ResourceUsage
+
 
 class RequestObservation(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -20,6 +22,8 @@ class RunSummary(BaseModel):
 
     policy: str
     cache_size: int
+    capacity_mode: str
+    llm_model: str
     measured_requests: int
     hits: int
     misses: int
@@ -28,7 +32,17 @@ class RunSummary(BaseModel):
     p95_hit_response_cosine_distance: float | None
     mean_end_to_end_response_cosine_distance: float
     mean_latency_ms: float
+    p95_latency_ms: float
+    p99_latency_ms: float
     mean_policy_overhead_ms: float
+    policy_throughput_qps: float | None
+    sequential_end_to_end_throughput_qps: float | None
+    runner_wall_time_seconds: float
+    runner_cpu_time_seconds: float
+    baseline_process_rss_mb: float | None
+    peak_process_rss_mb: float | None
+    peak_process_rss_delta_mb: float | None
+    runner_throughput_qps: float | None
     quality_adjusted_hit_rates: dict[str, float]
     bad_hit_rates: dict[str, float]
 
@@ -48,6 +62,7 @@ class MetricsAccumulator:
         self._hits = 0
         self._latency_sum = 0.0
         self._overhead_sum = 0.0
+        self._latencies: list[float] = []
         self._hit_distances: list[float] = []
         self._end_to_end_distance_sum = 0.0
         self._good_hits = {threshold: 0 for threshold in self._quality_thresholds}
@@ -59,29 +74,47 @@ class MetricsAccumulator:
         self._requests += 1
         self._latency_sum += observation.total_latency_ms
         self._overhead_sum += observation.policy_overhead_ms
+        self._latencies.append(observation.total_latency_ms)
+        if observation.response_cosine_distance is None:
+            raise ValueError("Every delivered response must include response_cosine_distance")
+        distance = observation.response_cosine_distance
+        self._end_to_end_distance_sum += distance
         if observation.hit:
-            if observation.response_cosine_distance is None:
-                raise ValueError("A cache hit must include response_cosine_distance")
-            distance = observation.response_cosine_distance
             self._hits += 1
             self._hit_distances.append(distance)
-            self._end_to_end_distance_sum += distance
             for threshold in self._quality_thresholds:
                 if distance <= threshold:
                     self._good_hits[threshold] += 1
                 else:
                     self._bad_hits[threshold] += 1
 
-    def summary(self, policy: str, cache_size: int) -> RunSummary:
+    def summary(
+        self,
+        policy: str,
+        cache_size: int,
+        *,
+        capacity_mode: str = "bounded",
+        llm_model: str = "unknown",
+        resource_usage: ResourceUsage | None = None,
+    ) -> RunSummary:
         if self._requests == 0:
             raise ValueError("No measured requests")
         hit_array = np.asarray(self._hit_distances, dtype=np.float64)
+        latency_array = np.asarray(self._latencies, dtype=np.float64)
         mean_hit_distance = float(hit_array.mean()) if hit_array.size else None
         p95_hit_distance = float(np.percentile(hit_array, 95)) if hit_array.size else None
         misses = self._requests - self._hits
+        mean_latency = self._latency_sum / self._requests
+        policy_seconds = self._overhead_sum / 1000.0
+        usage = resource_usage or ResourceUsage(
+            runner_wall_time_seconds=0.0,
+            runner_cpu_time_seconds=0.0,
+        )
         return RunSummary(
             policy=policy,
             cache_size=cache_size,
+            capacity_mode=capacity_mode,
+            llm_model=llm_model,
             measured_requests=self._requests,
             hits=self._hits,
             misses=misses,
@@ -91,8 +124,22 @@ class MetricsAccumulator:
             mean_end_to_end_response_cosine_distance=(
                 self._end_to_end_distance_sum / self._requests
             ),
-            mean_latency_ms=self._latency_sum / self._requests,
+            mean_latency_ms=mean_latency,
+            p95_latency_ms=float(np.percentile(latency_array, 95)),
+            p99_latency_ms=float(np.percentile(latency_array, 99)),
             mean_policy_overhead_ms=self._overhead_sum / self._requests,
+            policy_throughput_qps=(
+                self._requests / policy_seconds if policy_seconds > 0.0 else None
+            ),
+            sequential_end_to_end_throughput_qps=(
+                1000.0 / mean_latency if mean_latency > 0.0 else None
+            ),
+            runner_wall_time_seconds=usage.runner_wall_time_seconds,
+            runner_cpu_time_seconds=usage.runner_cpu_time_seconds,
+            baseline_process_rss_mb=usage.baseline_process_rss_mb,
+            peak_process_rss_mb=usage.peak_process_rss_mb,
+            peak_process_rss_delta_mb=usage.peak_process_rss_delta_mb,
+            runner_throughput_qps=usage.runner_throughput_qps,
             quality_adjusted_hit_rates={
                 _threshold_key(threshold): count / self._requests
                 for threshold, count in self._good_hits.items()

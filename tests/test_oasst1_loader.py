@@ -1,5 +1,5 @@
-from experiments.config import ResponseSelection
-from experiments.oasst1 import build_prompt_response_pairs
+from _experiments.config import ResponseSelection
+from _experiments.oasst1 import build_prompt_response_pairs
 
 
 def test_loader_selects_best_ranked_direct_assistant_reply() -> None:
@@ -10,6 +10,7 @@ def test_loader_selects_best_ranked_direct_assistant_reply() -> None:
             "role": "prompter",
             "lang": "en",
             "text": "Question",
+            "created_date": "2023-02-01T12:00:00+00:00",
             "review_result": True,
             "deleted": False,
         },
@@ -42,3 +43,5 @@ def test_loader_selects_best_ranked_direct_assistant_reply() -> None:
     )
     assert len(pairs) == 1
     assert pairs[0].reference_response == "Best"
+    assert pairs[0].created_at is not None
+    assert pairs[0].created_at.isoformat() == "2023-02-01T12:00:00+00:00"

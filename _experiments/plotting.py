@@ -27,14 +27,44 @@ def generate_plots(results_directory: str | Path) -> list[Path]:
         _line_plot(
             dataframe,
             metric="mean_latency_ms",
-            ylabel="Mean simulated latency (ms)",
+            ylabel="Mean end-to-end latency (ms)",
             output=plots_directory / "latency_vs_cache_size.png",
+        ),
+        _line_plot(
+            dataframe,
+            metric="p95_latency_ms",
+            ylabel="p95 end-to-end latency (ms)",
+            output=plots_directory / "p95_latency_vs_cache_size.png",
+        ),
+        _line_plot(
+            dataframe,
+            metric="p99_latency_ms",
+            ylabel="p99 end-to-end latency (ms)",
+            output=plots_directory / "p99_latency_vs_cache_size.png",
         ),
         _line_plot(
             dataframe,
             metric="mean_policy_overhead_ms",
             ylabel="Mean policy overhead (ms)",
             output=plots_directory / "policy_overhead_vs_cache_size.png",
+        ),
+        _line_plot(
+            dataframe,
+            metric="policy_throughput_qps",
+            ylabel="Policy throughput (requests/s)",
+            output=plots_directory / "policy_throughput_vs_cache_size.png",
+        ),
+        _line_plot(
+            dataframe,
+            metric="sequential_end_to_end_throughput_qps",
+            ylabel="Sequential end-to-end throughput (requests/s)",
+            output=plots_directory / "end_to_end_throughput_vs_cache_size.png",
+        ),
+        _line_plot(
+            dataframe,
+            metric="peak_process_rss_delta_mb",
+            ylabel="Peak process RSS increase (MiB)",
+            output=plots_directory / "peak_rss_delta_vs_cache_size.png",
         ),
     ]
 

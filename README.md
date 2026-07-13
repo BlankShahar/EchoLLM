@@ -27,7 +27,7 @@ python -m pip install -r requirements.txt
 Full OASST1 experiments:
 
 ```bash
-python -m pip install -r requirements-experiments.txt
+python -m pip install -r requirements-_experiments.txt
 ```
 
 Python 3.11+ is recommended.
@@ -65,16 +65,35 @@ PYTHONPATH=. pytest -q
 ## Run a deterministic smoke experiment
 
 ```bash
-PYTHONPATH=. python -m experiments.smoke
+PYTHONPATH=. python -m _experiments.smoke
 ```
 
 This produces raw per-request files, `summary.csv`, `summary.json`, and plots under `results/smoke/`.
 
 ## Run OASST1
 
+The default configuration combines the OASST1 train and validation splits and
+uses every selected English prompt once, ordered by its creation timestamp. It
+runs LRU, LFU, FIFO, RR, and SAGE at capacities
+starting at zero and appends an automatically resolved unbounded capacity equal
+to the number of unique prompt strings in the trace.
+
+Start Ollama, then run the experiment. Each request goes through `EchoLLM`; the
+configured `Ollama.ask()` supplies both generated text and measured latency.
+Responses are memoized in memory so each prompt is generated once and every
+policy receives the same `LLMResponse`:
+
 ```bash
-PYTHONPATH=. python -m experiments.run \
-  --config experiments/configs/oasst1_default.yaml
+python -m _experiments.run \
+  --config _experiments/configs/oasst1_default.yaml \
+  --model llama3.2:1b
+```
+
+For Slurm, edit the paths near the top of
+`experiments/slurm/run_oasst1.sbatch`, then submit it with:
+
+```bash
+sbatch _experiments/slurm/run_oasst1.sbatch
 ```
 
 Outputs are written to `results/oasst1_sage/` by default:
@@ -91,7 +110,7 @@ results/oasst1_sage/
 Regenerate plots without rerunning the trace:
 
 ```bash
-PYTHONPATH=. python -m experiments.plot \
+PYTHONPATH=. python -m _experiments.plot \
   --results-dir results/oasst1_sage
 ```
 
@@ -101,8 +120,10 @@ PYTHONPATH=. python -m experiments.plot \
 - **Hit-only response cosine distance**: cosine distance between the returned cached response and the OASST1 reference response for that request.
 - **Quality-adjusted hit rate at threshold `t`**: hits whose response distance is at most `t`, divided by **all** measured requests.
 - **Bad-hit rate at threshold `t`**: hits whose distance exceeds `t`, divided by all measured requests.
-- **Mean simulated latency**: cache overhead plus a configurable miss-latency model.
+- **Mean, p95, and p99 end-to-end latency**: cache overhead plus the latency returned by `ILLM.ask()` on misses.
 - **Mean policy overhead**: measured local lookup/admission runtime.
+- **Policy and sequential end-to-end throughput** in requests per second.
+- **Runner throughput, CPU time, and peak process RSS** for execution/resource context.
 
 The quality-adjusted hit rate is the central anti-reward-hacking metric. Hit rate alone rewards overly permissive matching; hit-only response distance alone can reward a policy that serves only a few easy hits. Their joint metric rewards many hits only when those hits return a sufficiently similar answer.
 
@@ -111,9 +132,11 @@ Prompt embeddings and response-quality embeddings use separate configurable mode
 ## Important fairness choices
 
 - Every policy uses the same exact resident scan, prompt embedding model, distance function, hit threshold, trace, cache capacity, and warm-up.
+- Every request is executed through `EchoLLM` with an `ICache` and an `ILLM`.
+- Every policy/capacity run receives a new in-memory cache. No FAISS or response SQLite state is shared between runs; only the policy-independent embedding cache is reused.
 - Baselines are LRU, LFU, FIFO, and random replacement.
-- Misses return the OASST1 reference response, so their response distance is zero in the optional end-to-end metric. Therefore, end-to-end response distance must not be interpreted without hit rate.
-- Raw results record each hit, prompt distance, response distance, estimated LLM latency, policy overhead, and SAGE admission delta.
+- Ollama generates each prompt once; its complete `LLMResponse` is replayed across policies to avoid repeated generation and model nondeterminism.
+- Raw results record each hit, prompt distance, returned-vs-reference response distance, backend latency, policy overhead, and SAGE admission delta.
 - `response_selection: top_rank` avoids ambiguity from evaluating the same prompt against several valid OASST1 answers.
 
-See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) and [`experiments/README.md`](experiments/README.md) for the detailed design and methodology.
+See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) and [`experiments/README.md`](_experiments/README.md) for the detailed design and methodology.

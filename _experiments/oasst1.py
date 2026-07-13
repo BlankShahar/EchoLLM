@@ -71,6 +71,7 @@ def build_prompt_response_pairs(
                 prompt=prompt_text,
                 reference_response=response_text,
                 source_index=source_index,
+                created_at=prompt.get("created_date"),
             )
         )
     if not pairs:
@@ -95,10 +96,12 @@ def _load_rows(config: DatasetConfig) -> Iterable[Mapping[str, Any]]:
             from datasets import load_dataset
         except ImportError as error:
             raise RuntimeError(
-                "The `datasets` package is required. Install requirements-experiments.txt."
+                "The `datasets` package is required. Install requirements-_experiments.txt."
             ) from error
-        dataset = load_dataset(config.dataset_name, split=config.split)
-        yield from dataset
+        splits = [config.split] if isinstance(config.split, str) else config.split
+        for split in splits:
+            dataset = load_dataset(config.dataset_name, split=split)
+            yield from dataset
         return
 
     assert config.local_path is not None

@@ -37,7 +37,12 @@ class OllamaResponseChunk(LLMResponseChunk):
 
 
 class Ollama(ILLM):
-    def __init__(self, model: OllamaModel, host: str, options: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        model: str | OllamaModel,
+        host: str,
+        options: dict[str, Any] | None = None,
+    ):
         self._client = ollama.Client(host=host)
         self._pull_model(model)
         self._model = model
@@ -67,7 +72,7 @@ class Ollama(ILLM):
         )
         for i, chunk in enumerate(stream, start=1):
             current_time = time.perf_counter()
-            yield LLMResponseChunk(
+            yield OllamaResponseChunk(
                 response_chunk=chunk.response,
                 chunk_number=i,
                 delay=(current_time - start_time) * 1000,

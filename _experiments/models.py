@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -11,6 +13,7 @@ class PromptResponsePair(BaseModel):
     prompt: str
     reference_response: str
     source_index: int = Field(ge=0)
+    created_at: datetime | None = None
 
 
 class TraceRequest(BaseModel):
@@ -22,3 +25,4 @@ class TraceRequest(BaseModel):
     response_id: str
     prompt: str
     reference_response: str
+    created_at: datetime | None = None

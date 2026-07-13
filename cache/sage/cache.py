@@ -333,7 +333,10 @@ class SAGESimilarityCache(ICache):
     def _choose_victim(self, deltas: np.ndarray) -> int:
         active_deltas = np.where(self._active, deltas, -np.inf)
         best_delta = float(np.max(active_deltas))
-        tied = np.flatnonzero(self._active & np.isclose(active_deltas, best_delta, atol=1e-12))
+        tied = np.flatnonzero(
+            self._active
+            & np.isclose(active_deltas, best_delta, rtol=0.0, atol=1e-12)
+        )
         if tied.size == 1:
             return int(tied[0])
         tied_accesses = self._last_access_steps[tied]

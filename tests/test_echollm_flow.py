@@ -43,3 +43,22 @@ def test_echo_llm_performs_one_embedding_per_request() -> None:
     assert echo.ask("semantically identical") == "answer"
     assert embedder.calls == 2
     assert llm.calls == 1
+
+
+def test_echo_llm_exposes_framework_measurements() -> None:
+    cache = SAGESimilarityCache(
+        max_size=1,
+        hit_distance_threshold=0.05,
+        prompt_embedder=lambda _: [1.0, 0.0],
+    )
+    echo = EchoLLM(cache=cache, llm=DummyLLM())
+
+    miss = echo.ask_with_metadata("first")
+    hit = echo.ask_with_metadata("second")
+
+    assert not miss.cache_hit
+    assert miss.llm_latency == 10.0
+    assert miss.cache_admission_latency >= 0.0
+    assert hit.cache_hit
+    assert hit.llm_latency == 0.0
+    assert hit.cache_lookup_latency >= 0.0
