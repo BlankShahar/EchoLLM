@@ -78,7 +78,14 @@ export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export PYTHONUNBUFFERED=1
 
-CONFIG_PATH="$CODE_PATH/_experiments/configs/oasst1_default.yaml"
+EXPERIMENT_MODULE="_experiments"
+CONFIG_PATH="$CODE_PATH/$EXPERIMENT_MODULE/configs/oasst1_default.yaml"
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "Experiment config not found: $CONFIG_PATH"
+  exit 3
+fi
+echo "Experiment module: $EXPERIMENT_MODULE"
+echo "Experiment config: $CONFIG_PATH"
 
 export OLLAMA_GPU_LAYERS=9999
 export OLLAMA_FLASH_ATTENTION=1
