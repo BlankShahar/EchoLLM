@@ -12,6 +12,8 @@ def load_oasst1_pairs(config: DatasetConfig) -> list[PromptResponsePair]:
     return build_prompt_response_pairs(
         rows,
         language=config.language,
+        exclude_deleted=config.exclude_deleted,
+        require_positive_review=config.require_positive_review,
         selection=config.response_selection,
         max_pairs=config.max_pairs,
     )
@@ -20,7 +22,9 @@ def load_oasst1_pairs(config: DatasetConfig) -> list[PromptResponsePair]:
 def build_prompt_response_pairs(
     rows: list[Mapping[str, Any]],
     *,
-    language: str,
+    language: str | None,
+    exclude_deleted: bool = True,
+    require_positive_review: bool = True,
     selection: ResponseSelection,
     max_pairs: int | None,
 ) -> list[PromptResponsePair]:
@@ -29,16 +33,24 @@ def build_prompt_response_pairs(
         row.get("message_id"): row
         for _, row in indexed_rows
         if row.get("role") == "prompter"
-        and row.get("lang") == language
-        and not row.get("deleted", False)
-        and row.get("review_result", True) is not False
+        and _row_is_eligible(
+            row,
+            language=language,
+            exclude_deleted=exclude_deleted,
+            require_positive_review=require_positive_review,
+        )
     }
 
     candidates: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for index, row in indexed_rows:
-        if row.get("role") != "assistant" or row.get("lang") != language:
+        if row.get("role") != "assistant":
             continue
-        if row.get("deleted", False) or row.get("review_result", True) is False:
+        if not _row_is_eligible(
+            row,
+            language=language,
+            exclude_deleted=exclude_deleted,
+            require_positive_review=require_positive_review,
+        ):
             continue
         parent_id = row.get("parent_id")
         if parent_id not in prompts:
@@ -79,6 +91,22 @@ def build_prompt_response_pairs(
     return pairs
 
 
+def _row_is_eligible(
+    row: Mapping[str, Any],
+    *,
+    language: str | None,
+    exclude_deleted: bool,
+    require_positive_review: bool,
+) -> bool:
+    if language is not None and row.get("lang") != language:
+        return False
+    if exclude_deleted and row.get("deleted", False):
+        return False
+    if require_positive_review and row.get("review_result", True) is False:
+        return False
+    return True
+
+
 def _response_sort_key(source_index: int, response: Mapping[str, Any]) -> tuple[float, float, int]:
     rank = response.get("rank")
     normalized_rank = float(rank) if rank is not None else float("inf")
@@ -96,7 +124,7 @@ def _load_rows(config: DatasetConfig) -> Iterable[Mapping[str, Any]]:
             from datasets import load_dataset
         except ImportError as error:
             raise RuntimeError(
-                "The `datasets` package is required. Install requirements-_experiments.txt."
+                "The `datasets` package is required. Install requirements-experiments.txt."
             ) from error
         splits = [config.split] if isinstance(config.split, str) else config.split
         for split in splits:

@@ -15,7 +15,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 
 EXPERIMENT_PATH="${EXPERIMENT_PATH:-/home/blanksh/_experiments/echollm-sage}"
 SOURCE_PATH="${SOURCE_PATH:-/home/blanksh/EchoLLM}"
-MODEL="${MODEL:-llama3.2:1b}"
+MODEL="${MODEL:-qwen3:8b}"
 
 JOB_ROOT="$EXPERIMENT_PATH/jobs/$SLURM_JOB_ID"
 CODE_PATH="$JOB_ROOT/code"
@@ -116,6 +116,9 @@ echo "Checking PyTorch CUDA access..."
 srun python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 
 echo "Running all policy/capacity experiments..."
+echo "Dataset mode: all usable OASST1 prompter-to-assistant edges, all languages and replies"
+echo "Shared semantic hit threshold: cosine distance <= 0.25"
+echo "SAGE admission: current request weight 0.1, replacement margin 0.0"
 srun python -m "$EXPERIMENT_MODULE.run" \
   --config "$CONFIG_PATH" \
   --model "$MODEL" \

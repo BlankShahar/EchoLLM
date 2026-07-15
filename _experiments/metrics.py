@@ -30,7 +30,10 @@ class RunSummary(BaseModel):
     hit_rate: float
     mean_hit_response_cosine_distance: float | None
     p95_hit_response_cosine_distance: float | None
+    mean_hit_semantic_accuracy: float | None
+    p05_hit_semantic_accuracy: float | None
     mean_end_to_end_response_cosine_distance: float
+    mean_end_to_end_semantic_accuracy: float
     mean_latency_ms: float
     p95_latency_ms: float
     p99_latency_ms: float
@@ -44,12 +47,21 @@ class RunSummary(BaseModel):
     peak_process_rss_delta_mb: float | None
     runner_throughput_qps: float | None
     quality_adjusted_hit_rates: dict[str, float]
+    good_hit_precisions: dict[str, float | None]
     bad_hit_rates: dict[str, float]
 
     def flat_dict(self) -> dict[str, object]:
-        result = self.model_dump(exclude={"quality_adjusted_hit_rates", "bad_hit_rates"})
+        result = self.model_dump(
+            exclude={
+                "quality_adjusted_hit_rates",
+                "good_hit_precisions",
+                "bad_hit_rates",
+            }
+        )
         for threshold, value in self.quality_adjusted_hit_rates.items():
             result[f"quality_adjusted_hit_rate@{threshold}"] = value
+        for threshold, value in self.good_hit_precisions.items():
+            result[f"good_hit_precision@{threshold}"] = value
         for threshold, value in self.bad_hit_rates.items():
             result[f"bad_hit_rate@{threshold}"] = value
         return result
@@ -105,6 +117,7 @@ class MetricsAccumulator:
         p95_hit_distance = float(np.percentile(hit_array, 95)) if hit_array.size else None
         misses = self._requests - self._hits
         mean_latency = self._latency_sum / self._requests
+        mean_end_to_end_distance = self._end_to_end_distance_sum / self._requests
         policy_seconds = self._overhead_sum / 1000.0
         usage = resource_usage or ResourceUsage(
             runner_wall_time_seconds=0.0,
@@ -121,9 +134,14 @@ class MetricsAccumulator:
             hit_rate=self._hits / self._requests,
             mean_hit_response_cosine_distance=mean_hit_distance,
             p95_hit_response_cosine_distance=p95_hit_distance,
-            mean_end_to_end_response_cosine_distance=(
-                self._end_to_end_distance_sum / self._requests
+            mean_hit_semantic_accuracy=(
+                1.0 - mean_hit_distance if mean_hit_distance is not None else None
             ),
+            p05_hit_semantic_accuracy=(
+                1.0 - p95_hit_distance if p95_hit_distance is not None else None
+            ),
+            mean_end_to_end_response_cosine_distance=mean_end_to_end_distance,
+            mean_end_to_end_semantic_accuracy=1.0 - mean_end_to_end_distance,
             mean_latency_ms=mean_latency,
             p95_latency_ms=float(np.percentile(latency_array, 95)),
             p99_latency_ms=float(np.percentile(latency_array, 99)),
@@ -142,6 +160,12 @@ class MetricsAccumulator:
             runner_throughput_qps=usage.runner_throughput_qps,
             quality_adjusted_hit_rates={
                 _threshold_key(threshold): count / self._requests
+                for threshold, count in self._good_hits.items()
+            },
+            good_hit_precisions={
+                _threshold_key(threshold): (
+                    count / self._hits if self._hits else None
+                )
                 for threshold, count in self._good_hits.items()
             },
             bad_hit_rates={

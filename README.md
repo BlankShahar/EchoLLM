@@ -11,7 +11,7 @@ SAGE treats a semantic cache as a set of overlapping coverage regions. It record
 - `echollm/echollm.py`: one-pass lookup and lookup-context propagation.
 - `cache/sage/`: policy, exact distance engine, ghost window, vectorized scorer, persistence, Pydantic models/configuration.
 - `cache/sage_similarity_cache.py`: convenient import compatible with EchoLLM's flat policy modules.
-- `experiments/`: OASST1 loader, trace generation, exact semantic baselines, response-quality evaluation, raw CSV output, summaries, and plots.
+- `_experiments/`: OASST1 loader, trace generation, exact semantic baselines, response-quality evaluation, raw CSV output, summaries, and plots.
 - `tests/`: mathematical equivalence, policy behavior, persistence, framework flow, dataset selection, and metric tests.
 
 The package is organized as a feature-branch overlay: copy its changed/new modules over an EchoLLM checkout, or use this self-contained core directly for policy and experiment work. Existing policies remain compatible because `ICache.lookup()` falls back to their original `is_hit()`/`on_hit()` methods.
@@ -27,7 +27,7 @@ python -m pip install -r requirements.txt
 Full OASST1 experiments:
 
 ```bash
-python -m pip install -r requirements-_experiments.txt
+python -m pip install -r requirements-experiments.txt
 ```
 
 Python 3.11+ is recommended.
@@ -73,8 +73,10 @@ This produces raw per-request files, `summary.csv`, `summary.json`, and plots un
 ## Run OASST1
 
 The default configuration combines the OASST1 train and validation splits and
-uses every selected English prompt once, ordered by its creation timestamp. It
-runs LRU, LFU, FIFO, RR, and SAGE at capacities
+uses every usable direct prompter-to-assistant edge across all languages. It
+disables review/deletion filters, retains every direct reply, orders the edges
+by creation timestamp, and treats them as independent requests. It runs LRU,
+LFU, FIFO, RR, and SAGE at capacities
 starting at zero and appends an automatically resolved unbounded capacity equal
 to the number of unique prompt strings in the trace.
 
@@ -85,21 +87,21 @@ policy receives the same `LLMResponse`:
 
 ```bash
 python -m _experiments.run \
-  --config _experiments/configs/oasst1_default.yaml \
-  --model llama3.2:1b
+  --config _experiments/configs/oasst1_default.yaml
 ```
 
 For Slurm, edit the paths near the top of
-`experiments/slurm/run_oasst1.sbatch`, then submit it with:
+`_experiments/slurm/run_oasst1.sbatch`, then submit it with:
 
 ```bash
 sbatch _experiments/slurm/run_oasst1.sbatch
 ```
 
-Outputs are written to `results/oasst1_sage/` by default:
+Outputs are written to `results/oasst1_all_sage/` by default. On Slurm, the
+script overrides this with a job-specific result directory.
 
 ```text
-results/oasst1_sage/
+results/oasst1_all_sage/
 ├── config.json
 ├── summary.csv
 ├── summary.json
@@ -111,13 +113,15 @@ Regenerate plots without rerunning the trace:
 
 ```bash
 PYTHONPATH=. python -m _experiments.plot \
-  --results-dir results/oasst1_sage
+  --results-dir results/oasst1_all_sage
 ```
 
 ## Main experimental metrics
 
 - **Semantic hit rate**: all semantic cache hits divided by all measured requests.
 - **Hit-only response cosine distance**: cosine distance between the returned cached response and the OASST1 reference response for that request.
+- **Semantic accuracy**: `1 - cosine distance`, reported hit-only and end to end so higher is better.
+- **Good-hit precision at threshold `t`**: quality-passing hits divided by all hits.
 - **Quality-adjusted hit rate at threshold `t`**: hits whose response distance is at most `t`, divided by **all** measured requests.
 - **Bad-hit rate at threshold `t`**: hits whose distance exceeds `t`, divided by all measured requests.
 - **Mean, p95, and p99 end-to-end latency**: cache overhead plus the latency returned by `ILLM.ask()` on misses.
@@ -137,6 +141,6 @@ Prompt embeddings and response-quality embeddings use separate configurable mode
 - Baselines are LRU, LFU, FIFO, and random replacement.
 - Ollama generates each prompt once; its complete `LLMResponse` is replayed across policies to avoid repeated generation and model nondeterminism.
 - Raw results record each hit, prompt distance, returned-vs-reference response distance, backend latency, policy overhead, and SAGE admission delta.
-- `response_selection: top_rank` avoids ambiguity from evaluating the same prompt against several valid OASST1 answers.
+- Every direct assistant reply is a separate trace item; repeated prompt strings with different valid OASST1 answers are deliberately retained.
 
-See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) and [`experiments/README.md`](_experiments/README.md) for the detailed design and methodology.
+See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) and [`_experiments/README.md`](_experiments/README.md) for the detailed design and methodology.

@@ -35,7 +35,10 @@ def test_quality_adjusted_hit_rate_uses_all_requests_as_denominator() -> None:
     summary = metrics.summary("SAGE", 10)
     assert summary.hit_rate == 2 / 3
     assert summary.quality_adjusted_hit_rates["0.2"] == 1 / 3
+    assert summary.good_hit_precisions["0.2"] == 1 / 2
     assert summary.bad_hit_rates["0.2"] == 1 / 3
+    assert math.isclose(summary.mean_hit_semantic_accuracy or 0.0, 0.75)
+    assert math.isclose(summary.mean_end_to_end_semantic_accuracy, 1.0 - (0.7 / 3.0))
     assert math.isclose(summary.p95_latency_ms, 9.1)
     assert math.isclose(summary.p99_latency_ms, 9.82)
     assert math.isclose(summary.policy_throughput_qps or 0.0, 1000.0)

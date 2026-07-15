@@ -6,12 +6,14 @@ Does SAGE improve semantic cache hit rate and latency over basic replacement pol
 
 ## Dataset extraction
 
-The loader reads OASST1 message rows and creates context-free, direct English
-prompter-to-assistant pairs. With `response_selection: top_rank`, the
-lowest-ranked direct assistant response is used as the reference; quality label
-and source order are deterministic fallbacks.
+The default loader reads both OASST1 splits and creates every usable direct
+prompter-to-assistant edge across all languages. Review/deletion filters are
+disabled and every direct assistant reply is retained. Rows that cannot form a
+prompter-to-assistant request/answer edge are not fabricated into requests.
 
-Using one selected answer per prompt is important. With all valid replies, the exact same prompt can have several acceptable references, making a cache hit appear wrong merely because it returned a different valid reply.
+The resulting edge count is written to `dataset_stats.json`; it is lower than
+the number of message rows because OASST1 rows are individual tree nodes rather
+than request/answer pairs.
 
 Local JSONL and Parquet inputs are also supported for offline reproducibility.
 
@@ -22,10 +24,9 @@ Local JSONL and Parquet inputs are also supported for offline reproducibility.
 - `shuffled`: repeats independently shuffled passes.
 - `zipf_clustered`: clusters prompt embeddings and samples semantic topics with Zipf-skewed popularity, then samples a prompt inside the selected topic.
 
-The default trace is `chronological` over the combined train and validation
-splits of the complete selected English dataset, with no synthetic repetition
-and no warm-up exclusion. Other modes remain available for controlled workload
-studies.
+The default trace is `chronological` over all extracted edges from the combined
+train and validation splits, with no synthetic repetition and no warm-up
+exclusion. Other modes remain available for controlled workload studies.
 
 The capacity sweep accepts zero. `include_unbounded_cache: true` adds a final
 capacity equal to the number of unique prompt strings in the actual trace, which
@@ -62,6 +63,10 @@ Let \(d_r\) be their cosine distance.
 
 This measures the average correctness of served hits, but it is not sufficient alone: a very conservative policy can achieve a low value by serving almost no hits.
 
+The summary also exposes this as **semantic accuracy**, `1 - cosine distance`,
+so higher is better. `mean_hit_semantic_accuracy` is the hit-only mean and
+`mean_end_to_end_semantic_accuracy` covers every delivered response.
+
 ### Quality-adjusted hit rate at threshold \(t\)
 
 \[
@@ -77,6 +82,10 @@ This is the preferred joint metric. It rewards a policy only for hits whose retu
 \]
 
 This exposes policies that improve hit rate by using an overly broad semantic threshold.
+
+`good_hit_precision@t` uses hits as its denominator. It answers: among the
+responses served from cache, what fraction passed the configured answer-quality
+threshold?
 
 ### End-to-end response distance
 
@@ -117,32 +126,41 @@ Important fields:
 
 ```yaml
 embedding:
-  prompt_model_name: sentence-transformers/all-MiniLM-L6-v2
-  quality_model_name: sentence-transformers/all-mpnet-base-v2
+  prompt_model_name: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  quality_model_name: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
 
 llm:
   provider: ollama
-  model: llama3.2:1b
+  model: qwen3:8b
   host: http://127.0.0.1:11434
   options:
     num_predict: 256
+    temperature: 0.0
+    seed: 7
 
 trace:
   mode: chronological
   request_count: null
 
 policy:
-  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000]
   include_unbounded_cache: true
-  hit_distance_threshold: 0.18
+  hit_distance_threshold: 0.25
   sage_ghost_capacity: 4096
-  sage_decay_half_life_requests: 10000
+  sage_decay_half_life_requests: 2048
+  sage_admission_margin: 0.0
+  sage_current_request_weight: 0.1
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]
 ```
 
 The numerical thresholds are experiment parameters, not universal constants. Tune the prompt hit threshold on a validation split and freeze it before test comparison. Likewise, define answer-quality thresholds from a held-out sample or human-judged calibration set.
+
+For SAGE admission, past ghost requests retain their normal recency weight but
+the miss currently being considered contributes only `0.1`. With a zero
+replacement margin, that request can displace a truly lower-value resident but
+cannot by itself overwhelm meaningful accumulated coverage.
 
 ## Run
 
@@ -180,7 +198,7 @@ Each compressed raw CSV includes:
 
 1. Choose train/validation/test partitions without leaking identical message trees across splits.
 2. Calibrate semantic-hit and answer-quality thresholds only on validation data.
-3. Report hit rate, response quality, mean/p95/p99 latency, throughput, overhead, and peak RSS together.
+3. Report hit rate, semantic accuracy, quality-adjusted hit rate, mean/p95/p99 latency, throughput, overhead, and peak RSS together.
 4. Sweep cache capacity and ghost capacity.
 5. Include SAGE ablations when making claims about which SAGE component caused an improvement.
 6. Inspect a stratified sample of good and bad hits manually or with a separate judged benchmark.

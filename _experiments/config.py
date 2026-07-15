@@ -33,11 +33,13 @@ class DatasetConfig(BaseModel):
 
     source: DatasetSource = DatasetSource.HUGGINGFACE
     dataset_name: str = "OpenAssistant/oasst1"
-    split: str | list[str] = "train"
+    split: str | list[str] = Field(default_factory=lambda: ["train", "validation"])
     local_path: Path | None = None
-    language: str = "en"
+    language: str | None = None
+    exclude_deleted: bool = False
+    require_positive_review: bool = False
     max_pairs: int | None = Field(default=None, gt=0)
-    response_selection: ResponseSelection = ResponseSelection.TOP_RANK
+    response_selection: ResponseSelection = ResponseSelection.ALL
 
     @model_validator(mode="after")
     def validate_local_source(self) -> "DatasetConfig":
@@ -52,8 +54,12 @@ class DatasetConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    prompt_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
-    quality_model_name: str = "sentence-transformers/all-mpnet-base-v2"
+    prompt_model_name: str = (
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
+    quality_model_name: str = (
+        "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    )
     batch_size: int = Field(default=128, gt=0)
     device: str | None = None
     cache_path: Path = Path(".cache/echollm_embeddings.sqlite3")
@@ -80,7 +86,7 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: LLMProvider = LLMProvider.OLLAMA
-    model: str = Field(default="llama3.2:1b", min_length=1)
+    model: str = Field(default="qwen3:8b", min_length=1)
     host: str = Field(default="http://127.0.0.1:11434", min_length=1)
     options: dict[str, Any] = Field(default_factory=lambda: {"num_predict": 256})
 
@@ -90,13 +96,25 @@ class PolicyConfig(BaseModel):
 
     policies: list[str] = Field(default_factory=lambda: ["LRU", "LFU", "FIFO", "RR", "SAGE"])
     cache_sizes: list[int] = Field(
-        default_factory=lambda: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+        default_factory=lambda: [
+            0,
+            50,
+            100,
+            250,
+            500,
+            1000,
+            2500,
+            5000,
+            10000,
+            20000,
+        ]
     )
     include_unbounded_cache: bool = True
-    hit_distance_threshold: float = Field(default=0.18, ge=0.0)
+    hit_distance_threshold: float = Field(default=0.25, ge=0.0)
     sage_ghost_capacity: int = Field(default=4096, gt=0)
-    sage_decay_half_life_requests: float | None = Field(default=None, gt=0.0)
+    sage_decay_half_life_requests: float | None = Field(default=2048, gt=0.0)
     sage_admission_margin: float = Field(default=0.0, ge=0.0)
+    sage_current_request_weight: float = Field(default=0.1, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_policy_values(self) -> "PolicyConfig":
@@ -119,7 +137,7 @@ class OutputConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     directory: Path = Path("results")
-    run_name: str = "oasst1_sage"
+    run_name: str = "oasst1_all_sage"
     write_raw_results: bool = True
     generate_plots: bool = True
 

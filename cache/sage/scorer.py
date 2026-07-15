@@ -7,16 +7,19 @@ class SAGEScorer:
     @staticmethod
     def score_all_victims(
         *,
-        coverage: np.ndarray,
         coverage_counts: np.ndarray,
+        unique_owners: np.ndarray,
         candidate_covers: np.ndarray,
         weights: np.ndarray,
         resident_active: np.ndarray,
     ) -> tuple[float, np.ndarray, np.ndarray]:
-        request_count, resident_capacity = coverage.shape
+        if coverage_counts.ndim != 1:
+            raise ValueError("coverage_counts must be one-dimensional")
+        request_count = coverage_counts.shape[0]
+        resident_capacity = resident_active.shape[0]
         expected_shape = (request_count,)
-        if coverage_counts.shape != expected_shape:
-            raise ValueError("coverage_counts shape mismatch")
+        if unique_owners.shape != expected_shape:
+            raise ValueError("unique_owners shape mismatch")
         if candidate_covers.shape != expected_shape:
             raise ValueError("candidate_covers shape mismatch")
         if weights.shape != expected_shape:
@@ -29,9 +32,14 @@ class SAGEScorer:
 
         uniquely_covered = coverage_counts == 1
         unrecovered = uniquely_covered & ~candidate_covers
-        unique_owners = np.argmax(coverage, axis=1)
+        unrecovered_owners = unique_owners[unrecovered]
+        if unrecovered_owners.size and (
+            int(unrecovered_owners.min()) < 0
+            or int(unrecovered_owners.max()) >= resident_capacity
+        ):
+            raise ValueError("unique owner is outside the resident capacity")
         victim_losses = np.bincount(
-            unique_owners[unrecovered],
+            unrecovered_owners,
             weights=weights[unrecovered],
             minlength=resident_capacity,
         ).astype(np.float64, copy=False)

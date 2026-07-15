@@ -66,7 +66,7 @@ class SentenceTransformerEmbeddingProvider:
         except ImportError as error:
             raise RuntimeError(
                 "The `sentence-transformers` package is required. "
-                "Install requirements-_experiments.txt."
+                "Install requirements-experiments.txt."
             ) from error
         self._model = SentenceTransformer(model_name, device=config.device)
 

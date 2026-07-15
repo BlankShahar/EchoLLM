@@ -97,11 +97,42 @@ class ExperimentRunner:
         (run_directory / "config.json").write_text(
             self.config.model_dump_json(indent=2), encoding="utf-8"
         )
+        (run_directory / "dataset_stats.json").write_text(
+            json.dumps(
+                {
+                    "prompt_response_pairs": len(self.pairs),
+                    "trace_requests": len(self._trace),
+                    "unique_prompt_ids": len({pair.prompt_id for pair in self.pairs}),
+                    "unique_prompt_strings": len({pair.prompt for pair in self.pairs}),
+                    "unique_response_ids": len({pair.response_id for pair in self.pairs}),
+                    "unique_response_strings": len(
+                        {pair.reference_response for pair in self.pairs}
+                    ),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(
+            f"Dataset: {len(self.pairs)} prompt-response edges, "
+            f"{len(self._trace)} trace requests, "
+            f"{len({request.prompt for request in self._trace})} unique prompt strings",
+            flush=True,
+        )
         self._prepare_llm_responses()
 
         summaries: list[RunSummary] = []
-        for cache_size, capacity_mode in self._capacity_runs():
+        capacity_runs = self._capacity_runs()
+        total_runs = len(capacity_runs) * len(self.config.policy.policies)
+        run_index = 0
+        for cache_size, capacity_mode in capacity_runs:
             for policy_name in self.config.policy.policies:
+                run_index += 1
+                print(
+                    f"[{run_index}/{total_runs}] Running {policy_name} "
+                    f"at capacity {cache_size} ({capacity_mode})...",
+                    flush=True,
+                )
                 summary = self._run_one(
                     policy_name,
                     cache_size,
@@ -109,7 +140,21 @@ class ExperimentRunner:
                     raw_directory,
                 )
                 summaries.append(summary)
+                self._write_summaries(run_directory, summaries)
+                print(
+                    f"[{run_index}/{total_runs}] {policy_name}: "
+                    f"hit_rate={summary.hit_rate:.4f}, "
+                    f"semantic_accuracy={_format_optional(summary.mean_hit_semantic_accuracy)}, "
+                    f"mean_latency_ms={summary.mean_latency_ms:.2f}",
+                    flush=True,
+                )
 
+        if self.config.output.generate_plots:
+            generate_plots(run_directory)
+        return run_directory
+
+    @staticmethod
+    def _write_summaries(run_directory: Path, summaries: list[RunSummary]) -> None:
         flat_rows = [summary.flat_dict() for summary in summaries]
         pd.DataFrame(flat_rows).sort_values(["policy", "cache_size"]).to_csv(
             run_directory / "summary.csv", index=False
@@ -117,9 +162,6 @@ class ExperimentRunner:
         (run_directory / "summary.json").write_text(
             json.dumps(flat_rows, indent=2), encoding="utf-8"
         )
-        if self.config.output.generate_plots:
-            generate_plots(run_directory)
-        return run_directory
 
     def _run_one(
         self,
@@ -252,6 +294,7 @@ class ExperimentRunner:
                 ghost_capacity=self.config.policy.sage_ghost_capacity,
                 decay_half_life_requests=self.config.policy.sage_decay_half_life_requests,
                 admission_margin=self.config.policy.sage_admission_margin,
+                current_request_weight=self.config.policy.sage_current_request_weight,
             )
         return ExactSemanticBaselineCache(
             BaselineKind(policy_name),
@@ -325,3 +368,7 @@ _RAW_FIELDS = [
     "candidate_admitted",
     "admission_net_delta",
 ]
+
+
+def _format_optional(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"

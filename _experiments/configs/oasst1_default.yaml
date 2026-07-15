@@ -2,13 +2,15 @@ dataset:
   source: huggingface
   dataset_name: OpenAssistant/oasst1
   split: [train, validation]
-  language: en
+  language: null
+  exclude_deleted: false
+  require_positive_review: false
   max_pairs: null
-  response_selection: top_rank
+  response_selection: all
 
 embedding:
-  prompt_model_name: sentence-transformers/all-MiniLM-L6-v2
-  quality_model_name: sentence-transformers/all-mpnet-base-v2
+  prompt_model_name: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  quality_model_name: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
   batch_size: 128
   device: null
   cache_path: .cache/echollm_embeddings.sqlite3
@@ -23,19 +25,22 @@ trace:
 
 llm:
   provider: ollama
-  model: llama3.2:1b
+  model: qwen3:8b
   host: http://127.0.0.1:11434
   options:
     num_predict: 256
+    temperature: 0.0
+    seed: 7
 
 policy:
   policies: [LRU, LFU, FIFO, RR, SAGE]
-  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000]
   include_unbounded_cache: true
-  hit_distance_threshold: 0.18
+  hit_distance_threshold: 0.25
   sage_ghost_capacity: 4096
-  sage_decay_half_life_requests: 10000
+  sage_decay_half_life_requests: 2048
   sage_admission_margin: 0.0
+  sage_current_request_weight: 0.1
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]
@@ -46,6 +51,6 @@ resources:
 
 output:
   directory: results
-  run_name: oasst1_sage
+  run_name: oasst1_all_sage
   write_raw_results: true
   generate_plots: true

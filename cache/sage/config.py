@@ -16,6 +16,7 @@ class SAGEConfig(BaseModel):
     ghost_capacity: int = Field(default=4096, gt=0)
     decay_half_life_requests: float | None = Field(default=None, gt=0.0)
     admission_margin: float = Field(default=0.0, ge=0.0)
+    current_request_weight: float = Field(default=0.1, ge=0.0, le=1.0)
     storage_path: Path | None = None
     storage_namespace: str = Field(default="default", min_length=1, max_length=128)
 

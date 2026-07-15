@@ -44,6 +44,7 @@ class SAGESimilarityCache(ICache):
         ghost_capacity: int = 4096,
         decay_half_life_requests: float | None = None,
         admission_margin: float = 0.0,
+        current_request_weight: float = 0.1,
         storage_path: str | Path | None = None,
         storage_namespace: str = "default",
         storage: SAGEStorage | None = None,
@@ -55,6 +56,7 @@ class SAGESimilarityCache(ICache):
             ghost_capacity=ghost_capacity,
             decay_half_life_requests=decay_half_life_requests,
             admission_margin=admission_margin,
+            current_request_weight=current_request_weight,
             storage_path=Path(storage_path) if storage_path is not None else None,
             storage_namespace=storage_namespace,
         )
@@ -208,12 +210,17 @@ class SAGESimilarityCache(ICache):
                 vector,
                 self.config.hit_distance_threshold,
             )
-            coverage = self._ghost.active_coverage()
             coverage_counts = self._ghost.active_coverage_counts()
-            weights = self._ghost.weights(self._step, self.config.decay_half_life_requests)
+            unique_owners = self._ghost.active_unique_owners()
+            weights = self._ghost.weights(
+                self._step,
+                self.config.decay_half_life_requests,
+                current_observation_id=context.observation_id,
+                current_observation_weight=self.config.current_request_weight,
+            )
             new_gain, victim_losses, deltas = self._scorer.score_all_victims(
-                coverage=coverage,
                 coverage_counts=coverage_counts,
+                unique_owners=unique_owners,
                 candidate_covers=candidate_covers,
                 weights=weights,
                 resident_active=self._active,
@@ -236,7 +243,14 @@ class SAGESimilarityCache(ICache):
                     net_delta=best_delta,
                 )
             else:
-                self._commit_slot(victim_slot, candidate_key, request, response, vector)
+                self._commit_slot(
+                    victim_slot,
+                    candidate_key,
+                    request,
+                    response,
+                    vector,
+                    ghost_coverage=candidate_covers,
+                )
                 self._stats.admissions += 1
                 self._stats.evictions += 1
                 self._last_decision = SAGEDecision(
@@ -350,15 +364,21 @@ class SAGESimilarityCache(ICache):
         prompt: str,
         response: str,
         vector: np.ndarray,
+        *,
+        ghost_coverage: np.ndarray | None = None,
     ) -> None:
         self._ensure_storage_metadata(vector.shape[0])
         assert self._resident_vectors is not None
-        ghost_vectors = self._ghost.active_vectors()
-        new_column = self._space.covers(
-            ghost_vectors,
-            vector,
-            self.config.hit_distance_threshold,
-        )
+        if ghost_coverage is None:
+            new_column = self._space.covers(
+                self._ghost.active_vectors(),
+                vector,
+                self.config.hit_distance_threshold,
+            )
+        else:
+            new_column = np.asarray(ghost_coverage, dtype=np.bool_)
+            if new_column.shape != (self._ghost.size,):
+                raise ValueError("ghost_coverage shape mismatch")
 
         old_active = bool(self._active[slot])
         old_vector = self._resident_vectors[slot].copy()

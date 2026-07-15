@@ -19,6 +19,7 @@ class GhostWindow:
         self._active = np.zeros(capacity, dtype=np.bool_)
         self._coverage = np.zeros((capacity, resident_capacity), dtype=np.bool_)
         self._coverage_counts = np.zeros(capacity, dtype=np.int32)
+        self._coverage_xor = np.zeros(capacity, dtype=np.int64)
         self._next_slot = 0
         self._next_id = 0
         self._size = 0
@@ -45,7 +46,12 @@ class GhostWindow:
         self._steps[physical_slot] = step
         self._ids[physical_slot] = observation_id
         self._coverage[physical_slot] = coverage
-        self._coverage_counts[physical_slot] = int(np.count_nonzero(coverage))
+        covering_slots = np.flatnonzero(coverage).astype(np.int64, copy=False)
+        self._coverage_counts[physical_slot] = int(covering_slots.size)
+        self._coverage_xor[physical_slot] = np.bitwise_xor.reduce(
+            covering_slots,
+            initial=np.int64(0),
+        )
         if not self._active[physical_slot]:
             self._active[physical_slot] = True
             self._size += 1
@@ -67,12 +73,28 @@ class GhostWindow:
     def active_coverage_counts(self) -> np.ndarray:
         return self._coverage_counts[self._active]
 
-    def weights(self, current_step: int, half_life_requests: float | None) -> np.ndarray:
+    def active_unique_owners(self) -> np.ndarray:
+        """Return the sole covering slot for rows whose coverage count is one."""
+        return self._coverage_xor[self._active]
+
+    def weights(
+        self,
+        current_step: int,
+        half_life_requests: float | None,
+        *,
+        current_observation_id: int | None = None,
+        current_observation_weight: float = 1.0,
+    ) -> np.ndarray:
         steps = self.active_steps()
         if half_life_requests is None:
-            return np.ones(steps.shape[0], dtype=np.float64)
-        ages = np.maximum(0, current_step - steps).astype(np.float64)
-        return np.exp2(-ages / half_life_requests)
+            weights = np.ones(steps.shape[0], dtype=np.float64)
+        else:
+            ages = np.maximum(0, current_step - steps).astype(np.float64)
+            weights = np.exp2(-ages / half_life_requests)
+        if current_observation_id is not None and current_observation_weight != 1.0:
+            active_ids = self._ids[self._active]
+            weights[active_ids == current_observation_id] *= current_observation_weight
+        return weights
 
     def replace_resident_column(self, resident_slot: int, new_coverage: np.ndarray) -> None:
         active_count = self._size
@@ -82,13 +104,16 @@ class GhostWindow:
             )
         active_indices = np.flatnonzero(self._active)
         old = self._coverage[active_indices, resident_slot]
+        changed = old ^ new_coverage
         self._coverage_counts[active_indices] += new_coverage.astype(np.int32) - old.astype(np.int32)
+        self._coverage_xor[active_indices[changed]] ^= np.int64(resident_slot)
         self._coverage[active_indices, resident_slot] = new_coverage
 
     def clear_resident_column(self, resident_slot: int) -> None:
         active_indices = np.flatnonzero(self._active)
         old = self._coverage[active_indices, resident_slot]
         self._coverage_counts[active_indices] -= old.astype(np.int32)
+        self._coverage_xor[active_indices[old]] ^= np.int64(resident_slot)
         self._coverage[active_indices, resident_slot] = False
 
     def coverage_column(self, resident_slot: int) -> np.ndarray:

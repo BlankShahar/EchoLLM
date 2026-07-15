@@ -26,6 +26,12 @@ def generate_plots(results_directory: str | Path) -> list[Path]:
         ),
         _line_plot(
             dataframe,
+            metric="mean_hit_semantic_accuracy",
+            ylabel="Mean hit semantic accuracy (1 - cosine distance)",
+            output=plots_directory / "semantic_accuracy_vs_cache_size.png",
+        ),
+        _line_plot(
+            dataframe,
             metric="mean_latency_ms",
             ylabel="Mean end-to-end latency (ms)",
             output=plots_directory / "latency_vs_cache_size.png",

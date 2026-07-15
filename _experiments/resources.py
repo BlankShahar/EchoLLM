@@ -27,7 +27,7 @@ class ResourceTracker:
                 import psutil
             except ImportError as error:
                 raise RuntimeError(
-                    "Resource measurement requires psutil; install requirements-_experiments.txt"
+                    "Resource measurement requires psutil; install requirements-experiments.txt"
                 ) from error
             self._process = psutil.Process()
         self._started_wall: float | None = None
