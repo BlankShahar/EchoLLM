@@ -25,14 +25,7 @@ from .storage import NullSAGEStorage, SAGEStorage, SQLiteSAGEStorage
 
 
 class SAGESimilarityCache(ICache):
-    """Semantic Admission and Gain-based Eviction.
-
-    SAGE maximizes recency-weighted semantic coverage over a bounded history of
-    requests. A candidate is admitted only when replacing some resident strictly
-    improves that objective. The implementation uses exact vectorized distances,
-    a fixed resident-slot layout, and O(W + C) replacement scoring after the
-    candidate-to-window distances are known.
-    """
+    """Windowed SAGE with soft semantic coverage and two demand horizons."""
 
     def __init__(
         self,
@@ -41,10 +34,21 @@ class SAGESimilarityCache(ICache):
         prompt_embedder: Callable[[str], Sequence[float]],
         *,
         ranking_distance_method: RankingDistanceMethod = RankingDistanceMethod.COSINE,
-        ghost_capacity: int = 4096,
+        ghost_capacity: int | None = None,
         decay_half_life_requests: float | None = None,
         admission_margin: float = 0.0,
         current_request_weight: float = 0.1,
+        window_fraction: float = 0.05,
+        soft_coverage: bool = True,
+        soft_coverage_power: float = 1.0,
+        recent_history_multiplier: float = 4.0,
+        recent_history_limit: int = 4096,
+        long_history_capacity: int | None = None,
+        long_history_multiplier: float = 8.0,
+        long_history_limit: int = 8192,
+        long_sample_stride: int = 8,
+        recent_evidence_weight: float = 0.7,
+        long_decay_half_life_requests: float | None = None,
         storage_path: str | Path | None = None,
         storage_namespace: str = "default",
         storage: SAGEStorage | None = None,
@@ -57,6 +61,17 @@ class SAGESimilarityCache(ICache):
             decay_half_life_requests=decay_half_life_requests,
             admission_margin=admission_margin,
             current_request_weight=current_request_weight,
+            window_fraction=window_fraction,
+            soft_coverage=soft_coverage,
+            soft_coverage_power=soft_coverage_power,
+            recent_history_multiplier=recent_history_multiplier,
+            recent_history_limit=recent_history_limit,
+            long_history_capacity=long_history_capacity,
+            long_history_multiplier=long_history_multiplier,
+            long_history_limit=long_history_limit,
+            long_sample_stride=long_sample_stride,
+            recent_evidence_weight=recent_evidence_weight,
+            long_decay_half_life_requests=long_decay_half_life_requests,
             storage_path=Path(storage_path) if storage_path is not None else None,
             storage_namespace=storage_namespace,
         )
@@ -64,10 +79,18 @@ class SAGESimilarityCache(ICache):
         self.config = config
         self._embedder = prompt_embedder
         self._space = VectorSpace(config.distance_method)
-        self._ghost = GhostWindow(config.ghost_capacity, config.max_size)
         self._scorer = SAGEScorer()
         self._lock = threading.RLock()
         self._legacy_local = threading.local()
+
+        self._window_mask = np.zeros(config.max_size, dtype=np.bool_)
+        self._window_mask[: config.window_size] = True
+        self._main_mask = ~self._window_mask
+        self._recent = GhostWindow(config.recent_capacity, config.max_size)
+        self._long = GhostWindow(config.long_capacity, config.max_size)
+        # Backward-compatible private alias used by older diagnostics.
+        self._ghost = self._recent
+        self._recent_evictions = 0
 
         self._resident_vectors: np.ndarray | None = None
         self._active = np.zeros(config.max_size, dtype=np.bool_)
@@ -89,7 +112,6 @@ class SAGESimilarityCache(ICache):
             self._storage = SQLiteSAGEStorage(config.storage_path, config.storage_namespace)
         else:
             self._storage = NullSAGEStorage()
-
         self._restore_residents()
 
     def lookup(self, request: str) -> CacheLookup:
@@ -99,7 +121,8 @@ class SAGESimilarityCache(ICache):
             self._ensure_dimension(vector.shape[0])
             self._step += 1
             distances, coverage = self._resident_distances_and_coverage(vector)
-            observation_id = self._ghost.add(vector, self._step, coverage)
+            utilities = self._main_utilities_from_distances(distances)
+            observation_id = self._observe(vector, utilities)
             context = SAGELookupContext(
                 embedding=vector.tolist(),
                 observation_id=observation_id,
@@ -108,13 +131,16 @@ class SAGESimilarityCache(ICache):
 
             self._stats.requests += 1
             if bool(coverage.any()):
-                masked_distances = np.where(coverage, distances, np.inf)
-                slot = int(np.argmin(masked_distances))
+                slot = int(np.argmin(np.where(coverage, distances, np.inf)))
                 response = self._responses[slot]
                 if response is None:
                     raise RuntimeError(f"Active resident slot {slot} has no response")
                 self._last_access_steps[slot] = self._step
                 self._stats.hits += 1
+                if self._window_mask[slot]:
+                    self._stats.window_hits += 1
+                else:
+                    self._stats.main_hits += 1
                 result = CacheLookup(
                     hit=True,
                     response=response,
@@ -124,14 +150,15 @@ class SAGESimilarityCache(ICache):
                         "matched_prompt": self._prompts[slot],
                         "prompt_distance": float(distances[slot]),
                         "resident_slot": slot,
+                        "segment": "window" if self._window_mask[slot] else "main",
                     },
                 )
             else:
                 self._stats.misses += 1
                 result = CacheLookup(hit=False, context=context)
 
-        self._stats.lookup_time_ms += (perf_counter_ns() - started) / 1_000_000.0
-        return result
+            self._stats.lookup_time_ms += (perf_counter_ns() - started) / 1_000_000.0
+            return result
 
     def is_hit(self, request: str) -> bool:
         lookup = self.lookup(request)
@@ -162,8 +189,10 @@ class SAGESimilarityCache(ICache):
             with self._lock:
                 self._ensure_dimension(vector.shape[0])
                 self._step += 1
-                _, coverage = self._resident_distances_and_coverage(vector)
-                observation_id = self._ghost.add(vector, self._step, coverage)
+                distances, _ = self._resident_distances_and_coverage(vector)
+                observation_id = self._observe(
+                    vector, self._main_utilities_from_distances(distances)
+                )
                 context = SAGELookupContext(
                     embedding=vector.tolist(),
                     observation_id=observation_id,
@@ -175,96 +204,28 @@ class SAGESimilarityCache(ICache):
             context = SAGELookupContext.model_validate(raw_context)
             vector = np.asarray(context.embedding, dtype=np.float32)
 
-        candidate_key = self._generate_key(request)
-        with self._lock:
-            self._ensure_dimension(vector.shape[0])
-            _, current_coverage = self._resident_distances_and_coverage(vector)
-            if bool(current_coverage.any()):
-                self._stats.rejections += 1
-                self._stats.concurrent_deduplications += 1
-                self._last_decision = SAGEDecision(
-                    admitted=False,
-                    reason="concurrent_semantic_duplicate",
-                    candidate_key=candidate_key,
-                )
-                self._stats.admission_time_ms += (perf_counter_ns() - started) / 1_000_000.0
-                return
-
-            free_slots = np.flatnonzero(~self._active)
-            if free_slots.size:
-                slot = int(free_slots[0])
-                self._commit_slot(slot, candidate_key, request, response, vector)
-                self._stats.admissions += 1
-                self._last_decision = SAGEDecision(
-                    admitted=True,
-                    reason="free_slot",
-                    candidate_key=candidate_key,
-                    victim_slot=slot,
-                )
-                self._stats.admission_time_ms += (perf_counter_ns() - started) / 1_000_000.0
-                return
-
-            ghost_vectors = self._ghost.active_vectors()
-            candidate_covers = self._space.covers(
-                ghost_vectors,
-                vector,
-                self.config.hit_distance_threshold,
-            )
-            coverage_counts = self._ghost.active_coverage_counts()
-            unique_owners = self._ghost.active_unique_owners()
-            weights = self._ghost.weights(
-                self._step,
-                self.config.decay_half_life_requests,
-                current_observation_id=context.observation_id,
-                current_observation_weight=self.config.current_request_weight,
-            )
-            new_gain, victim_losses, deltas = self._scorer.score_all_victims(
-                coverage_counts=coverage_counts,
-                unique_owners=unique_owners,
-                candidate_covers=candidate_covers,
-                weights=weights,
-                resident_active=self._active,
-            )
-            victim_slot = self._choose_victim(deltas)
-            best_delta = float(deltas[victim_slot])
-            victim_loss = float(victim_losses[victim_slot])
-            victim_key = self._keys[victim_slot]
-
-            if best_delta <= self.config.admission_margin + 1e-12:
-                self._stats.rejections += 1
-                self._last_decision = SAGEDecision(
-                    admitted=False,
-                    reason="non_positive_gain",
-                    candidate_key=candidate_key,
-                    victim_key=victim_key,
-                    victim_slot=victim_slot,
-                    candidate_new_gain=new_gain,
-                    victim_unrecovered_loss=victim_loss,
-                    net_delta=best_delta,
-                )
-            else:
-                self._commit_slot(
-                    victim_slot,
-                    candidate_key,
-                    request,
-                    response,
-                    vector,
-                    ghost_coverage=candidate_covers,
-                )
-                self._stats.admissions += 1
-                self._stats.evictions += 1
-                self._last_decision = SAGEDecision(
-                    admitted=True,
-                    reason="positive_replacement_gain",
-                    candidate_key=candidate_key,
-                    victim_key=victim_key,
-                    victim_slot=victim_slot,
-                    candidate_new_gain=new_gain,
-                    victim_unrecovered_loss=victim_loss,
-                    net_delta=best_delta,
-                )
-
-        self._stats.admission_time_ms += (perf_counter_ns() - started) / 1_000_000.0
+        incoming_key = self._generate_key(request)
+        try:
+            with self._lock:
+                self._ensure_dimension(vector.shape[0])
+                _, current_coverage = self._resident_distances_and_coverage(vector)
+                if bool(current_coverage.any()):
+                    self._stats.rejections += 1
+                    self._stats.concurrent_deduplications += 1
+                    self._last_decision = SAGEDecision(
+                        admitted=False,
+                        reason="concurrent_semantic_duplicate",
+                        candidate_key=incoming_key,
+                    )
+                    return
+                if self.config.window_size == 0:
+                    self._admit_direct(
+                        incoming_key, request, response, vector, context.observation_id
+                    )
+                else:
+                    self._admit_through_window(incoming_key, request, response, vector)
+        finally:
+            self._stats.admission_time_ms += (perf_counter_ns() - started) / 1_000_000.0
 
     @property
     def current_size(self) -> int:
@@ -282,16 +243,25 @@ class SAGESimilarityCache(ICache):
 
     def current_coverage_score(self) -> float:
         with self._lock:
-            counts = self._ghost.active_coverage_counts()
-            weights = self._ghost.weights(self._step, self.config.decay_half_life_requests)
-            return float(weights[counts > 0].sum())
+            values = []
+            for horizon, half_life, configured_weight in self._horizons():
+                if horizon.size == 0:
+                    continue
+                weights = horizon.weights(self._step, half_life)
+                total = float(weights.sum())
+                if total > 0.0:
+                    values.append(
+                        (
+                            configured_weight,
+                            float(np.sum(weights * horizon.active_top_values()[:, 0]) / total),
+                        )
+                    )
+            factor = sum(item[0] for item in values)
+            return sum(weight * score for weight, score in values) / factor if factor else 0.0
 
     def resident_snapshot(self) -> list[PersistedResident]:
         with self._lock:
-            snapshot: list[PersistedResident] = []
-            for slot in np.flatnonzero(self._active):
-                snapshot.append(self._resident_model(int(slot)))
-            return snapshot
+            return [self._resident_model(int(slot)) for slot in np.flatnonzero(self._active)]
 
     def reset(self, *, clear_storage: bool = True) -> None:
         with self._lock:
@@ -307,7 +277,10 @@ class SAGESimilarityCache(ICache):
             self._responses = [None] * self.config.max_size
             self._inserted_steps[:] = 0
             self._last_access_steps[:] = 0
-            self._ghost = GhostWindow(self.config.ghost_capacity, self.config.max_size)
+            self._recent = GhostWindow(self.config.recent_capacity, self.config.max_size)
+            self._long = GhostWindow(self.config.long_capacity, self.config.max_size)
+            self._ghost = self._recent
+            self._recent_evictions = 0
             self._step = 0
             self._stats = SAGEStats()
             self._last_decision = None
@@ -317,6 +290,318 @@ class SAGESimilarityCache(ICache):
 
     def close(self) -> None:
         self._storage.close()
+
+    def _admit_direct(
+        self,
+        key: str,
+        prompt: str,
+        response: str,
+        vector: np.ndarray,
+        observation_id: int,
+    ) -> None:
+        free = np.flatnonzero(self._main_mask & ~self._active)
+        if free.size:
+            slot = int(free[0])
+            self._commit_batch([(slot, key, prompt, response, vector)])
+            self._stats.admissions += 1
+            self._last_decision = SAGEDecision(
+                admitted=True, reason="free_slot", candidate_key=key, victim_slot=slot
+            )
+            return
+
+        new_gain, losses, deltas = self._score_candidate(
+            vector, current_observation_id=observation_id
+        )
+        victim = self._choose_victim(deltas)
+        best_delta = float(deltas[victim])
+        victim_key = self._keys[victim]
+        if best_delta <= self.config.admission_margin + 1e-12:
+            self._stats.rejections += 1
+            self._last_decision = SAGEDecision(
+                admitted=False,
+                reason="non_positive_gain",
+                candidate_key=key,
+                victim_key=victim_key,
+                victim_slot=victim,
+                candidate_new_gain=new_gain,
+                victim_unrecovered_loss=float(losses[victim]),
+                net_delta=best_delta,
+            )
+            return
+        self._commit_batch([(victim, key, prompt, response, vector)])
+        self._stats.admissions += 1
+        self._stats.evictions += 1
+        self._last_decision = SAGEDecision(
+            admitted=True,
+            reason="positive_replacement_gain",
+            candidate_key=key,
+            victim_key=victim_key,
+            victim_slot=victim,
+            candidate_new_gain=new_gain,
+            victim_unrecovered_loss=float(losses[victim]),
+            net_delta=best_delta,
+        )
+
+    def _admit_through_window(
+        self,
+        incoming_key: str,
+        prompt: str,
+        response: str,
+        vector: np.ndarray,
+    ) -> None:
+        free_window = np.flatnonzero(self._window_mask & ~self._active)
+        if free_window.size:
+            slot = int(free_window[0])
+            self._commit_batch([(slot, incoming_key, prompt, response, vector)])
+            self._stats.admissions += 1
+            self._stats.window_insertions += 1
+            self._last_decision = SAGEDecision(
+                admitted=True,
+                reason="window_insert",
+                candidate_key=incoming_key,
+                incoming_admitted=True,
+                victim_slot=slot,
+            )
+            return
+
+        window_slots = np.flatnonzero(self._window_mask & self._active)
+        outgoing_slot = int(
+            window_slots[np.argmin(self._last_access_steps[window_slots])]
+        )
+        outgoing_key = self._keys[outgoing_slot]
+        outgoing_prompt = self._prompts[outgoing_slot]
+        outgoing_response = self._responses[outgoing_slot]
+        assert self._resident_vectors is not None
+        outgoing_vector = self._resident_vectors[outgoing_slot].copy()
+        if outgoing_key is None or outgoing_prompt is None or outgoing_response is None:
+            raise RuntimeError("Probation window resident is incomplete")
+
+        incoming_update = (outgoing_slot, incoming_key, prompt, response, vector)
+        if self.config.main_size == 0:
+            self._commit_batch([incoming_update])
+            self._stats.admissions += 1
+            self._stats.window_insertions += 1
+            self._stats.rejections += 1
+            self._stats.promotion_rejections += 1
+            self._stats.evictions += 1
+            self._last_decision = SAGEDecision(
+                admitted=False,
+                promoted=False,
+                reason="window_candidate_rejected",
+                candidate_key=outgoing_key,
+                incoming_key=incoming_key,
+                incoming_admitted=True,
+            )
+            return
+
+        free_main = np.flatnonzero(self._main_mask & ~self._active)
+        if free_main.size:
+            main_slot = int(free_main[0])
+            self._commit_batch(
+                [
+                    (main_slot, outgoing_key, outgoing_prompt, outgoing_response, outgoing_vector),
+                    incoming_update,
+                ]
+            )
+            self._stats.admissions += 1
+            self._stats.window_insertions += 1
+            self._stats.promotions += 1
+            self._last_decision = SAGEDecision(
+                admitted=True,
+                promoted=True,
+                reason="main_free_slot",
+                candidate_key=outgoing_key,
+                incoming_key=incoming_key,
+                incoming_admitted=True,
+                victim_slot=main_slot,
+            )
+            return
+
+        main_slots = np.flatnonzero(self._main_mask & self._active)
+        main_distances = self._space.distances(
+            self._resident_vectors[main_slots], outgoing_vector
+        )
+        if bool((main_distances <= self.config.hit_distance_threshold).any()):
+            self._commit_batch([incoming_update])
+            self._stats.admissions += 1
+            self._stats.window_insertions += 1
+            self._stats.rejections += 1
+            self._stats.promotion_rejections += 1
+            self._stats.evictions += 1
+            self._last_decision = SAGEDecision(
+                admitted=False,
+                promoted=False,
+                reason="window_candidate_rejected",
+                candidate_key=outgoing_key,
+                incoming_key=incoming_key,
+                incoming_admitted=True,
+            )
+            return
+
+        new_gain, losses, deltas = self._score_candidate(outgoing_vector)
+        victim = self._choose_victim(deltas)
+        best_delta = float(deltas[victim])
+        victim_key = self._keys[victim]
+        if best_delta <= self.config.admission_margin + 1e-12:
+            self._commit_batch([incoming_update])
+            self._stats.admissions += 1
+            self._stats.window_insertions += 1
+            self._stats.rejections += 1
+            self._stats.promotion_rejections += 1
+            self._stats.evictions += 1
+            self._last_decision = SAGEDecision(
+                admitted=False,
+                promoted=False,
+                reason="window_candidate_rejected",
+                candidate_key=outgoing_key,
+                incoming_key=incoming_key,
+                incoming_admitted=True,
+                victim_key=victim_key,
+                victim_slot=victim,
+                candidate_new_gain=new_gain,
+                victim_unrecovered_loss=float(losses[victim]),
+                net_delta=best_delta,
+            )
+            return
+
+        self._commit_batch(
+            [
+                (victim, outgoing_key, outgoing_prompt, outgoing_response, outgoing_vector),
+                incoming_update,
+            ]
+        )
+        self._stats.admissions += 1
+        self._stats.window_insertions += 1
+        self._stats.promotions += 1
+        self._stats.evictions += 1
+        self._last_decision = SAGEDecision(
+            admitted=True,
+            promoted=True,
+            reason="window_candidate_promoted",
+            candidate_key=outgoing_key,
+            incoming_key=incoming_key,
+            incoming_admitted=True,
+            victim_key=victim_key,
+            victim_slot=victim,
+            candidate_new_gain=new_gain,
+            victim_unrecovered_loss=float(losses[victim]),
+            net_delta=best_delta,
+        )
+
+    def _score_candidate(
+        self,
+        vector: np.ndarray,
+        *,
+        current_observation_id: int | None = None,
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        resident_active = self._active & self._main_mask
+        parts: list[tuple[float, float, np.ndarray, np.ndarray]] = []
+        for horizon, half_life, configured_weight in self._horizons():
+            if horizon.size == 0 or configured_weight == 0.0:
+                continue
+            candidate = self._utilities_for_vectors(horizon.active_vectors(), vector)
+            weights = horizon.weights(
+                self._step,
+                half_life,
+                current_observation_id=current_observation_id,
+                current_observation_weight=self.config.current_request_weight,
+            )
+            total_weight = float(weights.sum())
+            if total_weight == 0.0:
+                continue
+            gain, losses, deltas = self._scorer.score_from_top_two(
+                top_values=horizon.active_top_values(),
+                top_slots=horizon.active_top_slots(),
+                candidate_utilities=candidate,
+                weights=weights,
+                resident_active=resident_active,
+            )
+            parts.append((configured_weight, gain / total_weight, losses / total_weight, deltas / total_weight))
+
+        if not parts:
+            losses = np.full(self.config.max_size, np.inf, dtype=np.float64)
+            deltas = np.full(self.config.max_size, -np.inf, dtype=np.float64)
+            deltas[resident_active] = 0.0
+            losses[resident_active] = 0.0
+            return 0.0, losses, deltas
+        factor = sum(part[0] for part in parts)
+        new_gain = sum(part[0] * part[1] for part in parts) / factor
+        losses = sum((part[0] * part[2] for part in parts), np.zeros(self.config.max_size)) / factor
+        deltas = sum((part[0] * part[3] for part in parts), np.zeros(self.config.max_size)) / factor
+        deltas[~resident_active] = -np.inf
+        losses[~resident_active] = np.inf
+        return float(new_gain), losses, deltas
+
+    def _choose_victim(self, deltas: np.ndarray) -> int:
+        resident_active = self._active & self._main_mask
+        active_deltas = np.where(resident_active, deltas, -np.inf)
+        best_delta = float(np.max(active_deltas))
+        tied = np.flatnonzero(
+            resident_active
+            & np.isclose(active_deltas, best_delta, rtol=0.0, atol=1e-12)
+        )
+        if tied.size == 1:
+            return int(tied[0])
+
+        evidence_counts = self._recent.nonzero_counts(tied) + self._long.nonzero_counts(tied)
+        zero_evidence = tied[evidence_counts == 0]
+        if zero_evidence.size:
+            accesses = self._last_access_steps[zero_evidence]
+            least_recent = zero_evidence[accesses == accesses.min()]
+            return int(least_recent.min())
+
+        responsibilities = self._fractional_responsibilities(tied)
+        minimum = float(responsibilities.min())
+        tied = tied[np.isclose(responsibilities, minimum, rtol=0.0, atol=1e-12)]
+        if tied.size == 1:
+            return int(tied[0])
+        accesses = self._last_access_steps[tied]
+        least_recent = tied[accesses == accesses.min()]
+        return int(least_recent.min())
+
+    def _fractional_responsibilities(self, slots: np.ndarray) -> np.ndarray:
+        parts: list[tuple[float, np.ndarray]] = []
+        for horizon, half_life, configured_weight in self._horizons():
+            if horizon.size == 0 or configured_weight == 0.0:
+                continue
+            weights = horizon.weights(self._step, half_life)
+            total = float(weights.sum())
+            if total > 0.0:
+                parts.append(
+                    (
+                        configured_weight,
+                        horizon.fractional_responsibility(weights, slots) / total,
+                    )
+                )
+        factor = sum(item[0] for item in parts)
+        if factor == 0.0:
+            return np.zeros(slots.size, dtype=np.float64)
+        return sum((weight * values for weight, values in parts), np.zeros(slots.size)) / factor
+
+    def _horizons(self) -> list[tuple[GhostWindow, float | None, float]]:
+        return [
+            (
+                self._recent,
+                self.config.decay_half_life_requests,
+                self.config.recent_evidence_weight,
+            ),
+            (
+                self._long,
+                self.config.long_decay_half_life_requests,
+                1.0 - self.config.recent_evidence_weight,
+            ),
+        ]
+
+    def _observe(self, vector: np.ndarray, utilities: np.ndarray) -> int:
+        observation_id, evicted = self._recent.add_with_evicted(
+            vector, self._step, utilities
+        )
+        if evicted is not None:
+            self._recent_evictions += 1
+            if self._recent_evictions % self.config.long_sample_stride == 0:
+                evicted_vector, evicted_step, evicted_utilities = evicted
+                self._long.add(evicted_vector, evicted_step, evicted_utilities)
+        return observation_id
 
     def _ensure_dimension(self, dimension: int) -> None:
         if self._resident_vectors is None:
@@ -344,71 +629,98 @@ class SAGESimilarityCache(ICache):
         coverage[active_slots] = active_distances <= self.config.hit_distance_threshold
         return distances, coverage
 
-    def _choose_victim(self, deltas: np.ndarray) -> int:
-        active_deltas = np.where(self._active, deltas, -np.inf)
-        best_delta = float(np.max(active_deltas))
-        tied = np.flatnonzero(
-            self._active
-            & np.isclose(active_deltas, best_delta, rtol=0.0, atol=1e-12)
-        )
-        if tied.size == 1:
-            return int(tied[0])
-        tied_accesses = self._last_access_steps[tied]
-        least_recent = tied[tied_accesses == tied_accesses.min()]
-        return int(least_recent.min())
+    def _main_utilities_from_distances(self, distances: np.ndarray) -> np.ndarray:
+        utilities = np.zeros(self.config.max_size, dtype=np.float32)
+        active_main = np.flatnonzero(self._active & self._main_mask)
+        if active_main.size:
+            utilities[active_main] = self._distance_utilities(distances[active_main])
+        return utilities
 
-    def _commit_slot(
+    def _utilities_for_vectors(self, vectors: np.ndarray, vector: np.ndarray) -> np.ndarray:
+        if vectors.shape[0] == 0:
+            return np.empty(0, dtype=np.float32)
+        return self._distance_utilities(self._space.distances(vectors, vector))
+
+    def _distance_utilities(self, distances: np.ndarray) -> np.ndarray:
+        threshold = self.config.hit_distance_threshold
+        if not self.config.soft_coverage:
+            return (distances <= threshold).astype(np.float32)
+        if threshold == 0.0:
+            return np.isclose(distances, 0.0, rtol=0.0, atol=1e-7).astype(np.float32)
+        utilities = np.clip(1.0 - distances / threshold, 0.0, 1.0)
+        if self.config.soft_coverage_power != 1.0:
+            utilities = np.power(utilities, self.config.soft_coverage_power)
+        utilities[distances > threshold] = 0.0
+        return utilities.astype(np.float32, copy=False)
+
+    def _commit_batch(
         self,
-        slot: int,
-        key: str,
-        prompt: str,
-        response: str,
-        vector: np.ndarray,
-        *,
-        ghost_coverage: np.ndarray | None = None,
+        updates: list[tuple[int, str, str, str, np.ndarray]],
     ) -> None:
-        self._ensure_storage_metadata(vector.shape[0])
+        slots = [update[0] for update in updates]
+        if len(slots) != len(set(slots)):
+            raise ValueError("A slot may be updated only once per transaction")
         assert self._resident_vectors is not None
-        if ghost_coverage is None:
-            new_column = self._space.covers(
-                self._ghost.active_vectors(),
-                vector,
-                self.config.hit_distance_threshold,
+        self._ensure_storage_metadata(self._resident_vectors.shape[1])
+
+        old_state = {
+            slot: (
+                bool(self._active[slot]),
+                self._resident_vectors[slot].copy(),
+                self._keys[slot],
+                self._prompts[slot],
+                self._responses[slot],
+                int(self._inserted_steps[slot]),
+                int(self._last_access_steps[slot]),
+                self._recent.utility_column(slot),
+                self._long.utility_column(slot),
             )
-        else:
-            new_column = np.asarray(ghost_coverage, dtype=np.bool_)
-            if new_column.shape != (self._ghost.size,):
-                raise ValueError("ghost_coverage shape mismatch")
-
-        old_active = bool(self._active[slot])
-        old_vector = self._resident_vectors[slot].copy()
-        old_key = self._keys[slot]
-        old_prompt = self._prompts[slot]
-        old_response = self._responses[slot]
-        old_inserted = int(self._inserted_steps[slot])
-        old_last_access = int(self._last_access_steps[slot])
-        old_column = self._ghost.coverage_column(slot)
-
-        self._resident_vectors[slot] = vector
-        self._active[slot] = True
-        self._keys[slot] = key
-        self._prompts[slot] = prompt
-        self._responses[slot] = response
-        self._inserted_steps[slot] = self._step
-        self._last_access_steps[slot] = self._step
-        self._ghost.replace_resident_column(slot, new_column)
-
+            for slot in slots
+        }
         try:
-            self._storage.upsert(self._resident_model(slot))
+            for slot, key, prompt, response, vector in updates:
+                self._resident_vectors[slot] = vector
+                self._active[slot] = True
+                self._keys[slot] = key
+                self._prompts[slot] = prompt
+                self._responses[slot] = response
+                self._inserted_steps[slot] = self._step
+                self._last_access_steps[slot] = self._step
+                if self._main_mask[slot]:
+                    recent_column = self._utilities_for_vectors(
+                        self._recent.active_vectors(), vector
+                    )
+                    long_column = self._utilities_for_vectors(
+                        self._long.active_vectors(), vector
+                    )
+                else:
+                    recent_column = np.zeros(self._recent.size, dtype=np.float32)
+                    long_column = np.zeros(self._long.size, dtype=np.float32)
+                self._recent.replace_resident_column(slot, recent_column)
+                self._long.replace_resident_column(slot, long_column)
+            self._storage.apply([self._resident_model(slot) for slot in slots])
         except Exception:
-            self._resident_vectors[slot] = old_vector
-            self._active[slot] = old_active
-            self._keys[slot] = old_key
-            self._prompts[slot] = old_prompt
-            self._responses[slot] = old_response
-            self._inserted_steps[slot] = old_inserted
-            self._last_access_steps[slot] = old_last_access
-            self._ghost.replace_resident_column(slot, old_column)
+            for slot in slots:
+                (
+                    active,
+                    resident_vector,
+                    key,
+                    prompt,
+                    response,
+                    inserted,
+                    last_access,
+                    recent_column,
+                    long_column,
+                ) = old_state[slot]
+                self._active[slot] = active
+                self._resident_vectors[slot] = resident_vector
+                self._keys[slot] = key
+                self._prompts[slot] = prompt
+                self._responses[slot] = response
+                self._inserted_steps[slot] = inserted
+                self._last_access_steps[slot] = last_access
+                self._recent.replace_resident_column(slot, recent_column)
+                self._long.replace_resident_column(slot, long_column)
             raise
 
     def _resident_model(self, slot: int) -> PersistedResident:
@@ -465,6 +777,9 @@ class SAGESimilarityCache(ICache):
                 distance_method=self.config.distance_method.value,
                 hit_distance_threshold=self.config.hit_distance_threshold,
                 vector_dimension=dimension,
+                window_size=self.config.window_size,
+                soft_coverage=self.config.soft_coverage,
+                soft_coverage_power=self.config.soft_coverage_power,
             )
         )
         self._storage_initialized = True

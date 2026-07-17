@@ -14,7 +14,7 @@ from _experiments.config import (
     TraceMode,
 )
 from _experiments.models import PromptResponsePair
-from _experiments.runner import ExperimentRunner
+from _experiments.runner import ExperimentRunner, format_duration
 from llm import ILLM, LLMResponse, LLMResponseChunk
 
 
@@ -34,6 +34,38 @@ def test_capacity_runs_include_zero_and_resolved_unbounded() -> None:
         (1, "bounded"),
         (3, "unbounded"),
     ]
+
+
+def test_runner_passes_windowed_sage_configuration() -> None:
+    runner = _runner(
+        pairs=[_pair(0), _pair(1), _pair(2)],
+        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+        policy=PolicyConfig(
+            policies=["SAGE"],
+            cache_sizes=[3],
+            include_unbounded_cache=False,
+            sage_window_fraction=0.34,
+            sage_soft_coverage=False,
+            sage_soft_coverage_power=2.0,
+            sage_ghost_capacity=7,
+            sage_long_history_capacity=9,
+            sage_long_sample_stride=3,
+            sage_recent_evidence_weight=0.6,
+            sage_long_decay_half_life_requests=100.0,
+        ),
+    )
+
+    cache = runner._build_cache("SAGE", 3)
+
+    assert cache is not None
+    assert cache.config.window_size == 1
+    assert cache.config.soft_coverage is False
+    assert cache.config.soft_coverage_power == 2.0
+    assert cache.config.recent_capacity == 7
+    assert cache.config.long_capacity == 9
+    assert cache.config.long_sample_stride == 3
+    assert cache.config.recent_evidence_weight == 0.6
+    assert cache.config.long_decay_half_life_requests == 100.0
 
 
 def test_quality_evaluation_time_is_not_policy_overhead() -> None:
@@ -61,9 +93,10 @@ def test_quality_evaluation_time_is_not_policy_overhead() -> None:
 
 def test_runner_uses_one_framework_llm_response_for_every_policy(
     tmp_path: Path,
+    capsys,
 ) -> None:
     backend = GeneratedLLM()
-    pair = _pair(0)
+    pair = _pair(0).model_copy(update={"source_model": "source-model"})
     config = ExperimentConfig(
         trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
         policy=PolicyConfig(
@@ -91,11 +124,66 @@ def test_runner_uses_one_framework_llm_response_for_every_policy(
     output = runner.run()
     summary = pd.read_csv(output / "summary.csv")
     raw = pd.read_csv(output / "raw" / "lru_cache_0.csv.gz")
+    sage_raw = pd.read_csv(output / "raw" / "sage_cache_1.csv.gz")
 
     assert backend.calls == 1
     assert len(summary) == 4
     assert raw.loc[0, "backend_latency_ms"] == 25.0
     assert raw.loc[0, "response_cosine_distance"] == 0.0
+    assert raw.loc[0, "source_model"] == "source-model"
+    assert bool(sage_raw.loc[0, "incoming_admitted"])
+    assert "promoted" in sage_raw.columns
+    assert not list((output / "raw").glob("*.partial"))
+    captured = capsys.readouterr().out
+    assert "LRU cache=0 (no_cache)" in captured
+    assert "completed in 00:00:" in captured
+
+
+def test_failed_run_keeps_partial_raw_output(tmp_path: Path) -> None:
+    pair = _pair(0)
+    config = ExperimentConfig(
+        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+        policy=PolicyConfig(
+            policies=["LRU"],
+            cache_sizes=[1],
+            include_unbounded_cache=False,
+        ),
+        resources=ResourceConfig(enabled=False),
+        output=OutputConfig(
+            directory=tmp_path,
+            run_name="partial-output",
+            write_raw_results=True,
+            generate_plots=False,
+        ),
+    )
+    runner = ExperimentRunner(
+        config,
+        [pair],
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+    )
+    raw_directory = tmp_path / "raw"
+    raw_directory.mkdir()
+
+    def fail_quality_evaluation(returned: str, reference: str) -> float:
+        raise RuntimeError("quality evaluator failed")
+
+    runner._response_distance = fail_quality_evaluation
+
+    try:
+        runner._run_one("LRU", 1, "bounded", raw_directory)
+    except RuntimeError as error:
+        assert str(error) == "quality evaluator failed"
+    else:
+        raise AssertionError("Expected the policy run to fail")
+
+    assert (raw_directory / "lru_cache_1.csv.gz.partial").exists()
+    assert not (raw_directory / "lru_cache_1.csv.gz").exists()
+
+
+def test_format_duration_uses_fixed_width_hours_minutes_seconds() -> None:
+    assert format_duration(0.4) == "00:00:00"
+    assert format_duration(3661.4) == "01:01:01"
 
 
 def _runner(

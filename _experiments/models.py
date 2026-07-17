@@ -14,6 +14,7 @@ class PromptResponsePair(BaseModel):
     reference_response: str
     source_index: int = Field(ge=0)
     created_at: datetime | None = None
+    source_model: str | None = None
 
 
 class TraceRequest(BaseModel):
@@ -26,3 +27,4 @@ class TraceRequest(BaseModel):
     prompt: str
     reference_response: str
     created_at: datetime | None = None
+    source_model: str | None = None

@@ -1,10 +1,13 @@
 import csv
 import gzip
 import json
+import sys
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from cache import ICache
 from cache.sage import SAGESimilarityCache
@@ -15,6 +18,7 @@ from text_similarity.vector_utils import cosine_distance
 
 from .baselines import BaselineKind, ExactSemanticBaselineCache
 from .config import ExperimentConfig
+from .datasets import load_prompt_response_pairs
 from .embeddings import (
     EmbeddingProvider,
     PrecomputedEmbedder,
@@ -23,7 +27,6 @@ from .embeddings import (
 from .llm import MemoizedLLM, ReferenceLLM, build_llm
 from .metrics import MetricsAccumulator, RequestObservation, RunSummary
 from .models import PromptResponsePair, TraceRequest
-from .oasst1 import load_oasst1_pairs
 from .plotting import generate_plots
 from .resources import ResourceTracker, ResourceUsage
 from .trace import build_trace
@@ -66,7 +69,7 @@ class ExperimentRunner:
 
     @classmethod
     def from_config(cls, config: ExperimentConfig) -> "ExperimentRunner":
-        pairs = load_oasst1_pairs(config.dataset)
+        pairs = load_prompt_response_pairs(config.dataset)
         prompt_provider = SentenceTransformerEmbeddingProvider(
             config.embedding,
             config.embedding.prompt_model_name,
@@ -133,6 +136,7 @@ class ExperimentRunner:
                     f"at capacity {cache_size} ({capacity_mode})...",
                     flush=True,
                 )
+                experiment_started = perf_counter()
                 summary = self._run_one(
                     policy_name,
                     cache_size,
@@ -141,11 +145,13 @@ class ExperimentRunner:
                 )
                 summaries.append(summary)
                 self._write_summaries(run_directory, summaries)
+                experiment_seconds = perf_counter() - experiment_started
                 print(
                     f"[{run_index}/{total_runs}] {policy_name}: "
                     f"hit_rate={summary.hit_rate:.4f}, "
                     f"semantic_accuracy={_format_optional(summary.mean_hit_semantic_accuracy)}, "
-                    f"mean_latency_ms={summary.mean_latency_ms:.2f}",
+                    f"mean_latency_ms={summary.mean_latency_ms:.2f}; "
+                    f"completed in {format_duration(experiment_seconds)}",
                     flush=True,
                 )
 
@@ -177,6 +183,8 @@ class ExperimentRunner:
         resource_usage: ResourceUsage | None = None
         raw_handle = None
         writer = None
+        raw_path: Path | None = None
+        partial_raw_path: Path | None = None
         try:
             if self.config.output.write_raw_results:
                 capacity_label = (
@@ -188,79 +196,105 @@ class ExperimentRunner:
                     raw_directory
                     / f"{policy_name.lower()}_cache_{capacity_label}.csv.gz"
                 )
-                raw_handle = gzip.open(raw_path, mode="wt", encoding="utf-8", newline="")
+                partial_raw_path = Path(f"{raw_path}.partial")
+                partial_raw_path.unlink(missing_ok=True)
+                raw_handle = gzip.open(
+                    partial_raw_path,
+                    mode="wt",
+                    encoding="utf-8",
+                    newline="",
+                )
                 writer = csv.DictWriter(raw_handle, fieldnames=_RAW_FIELDS)
                 writer.writeheader()
 
-            for request in self._trace:
-                measured = request.request_index >= self.config.trace.warmup_requests
-                if measured:
-                    resource_tracker.start()
+            progress_label = f"{policy_name} cache={cache_size} ({capacity_mode})"
+            with tqdm(
+                self._trace,
+                total=len(self._trace),
+                desc=progress_label,
+                unit="request",
+                mininterval=5.0,
+                dynamic_ncols=True,
+                file=sys.stdout,
+            ) as requests:
+                for request in requests:
+                    measured = request.request_index >= self.config.trace.warmup_requests
+                    if measured:
+                        resource_tracker.start()
 
-                result = echo_llm.ask_with_metadata(request.prompt)
-                policy_overhead_ms = result.cache_latency
-                decision_payload: dict[str, object] = {
-                    "candidate_admitted": "",
-                    "admission_net_delta": "",
-                }
-                response_distance = self._response_distance(
-                    result.response, request.reference_response
-                )
-                if not result.cache_hit:
-                    if (
-                        isinstance(cache, SAGESimilarityCache)
-                        and cache.last_decision is not None
-                    ):
-                        decision_payload = {
-                            "candidate_admitted": cache.last_decision.admitted,
-                            "admission_net_delta": cache.last_decision.net_delta,
-                        }
-
-                total_latency_ms = policy_overhead_ms + result.llm_latency
-                observation = RequestObservation(
-                    measured=measured,
-                    hit=result.cache_hit,
-                    response_cosine_distance=response_distance,
-                    total_latency_ms=total_latency_ms,
-                    policy_overhead_ms=policy_overhead_ms,
-                )
-                accumulator.record(observation)
-                if measured:
-                    measured_index = (
-                        request.request_index
-                        - self.config.trace.warmup_requests
-                        + 1
+                    result = echo_llm.ask_with_metadata(request.prompt)
+                    policy_overhead_ms = result.cache_latency
+                    decision_payload: dict[str, object] = {
+                        "candidate_admitted": "",
+                        "admission_net_delta": "",
+                        "incoming_admitted": "",
+                        "promoted": "",
+                    }
+                    response_distance = self._response_distance(
+                        result.response, request.reference_response
                     )
-                    resource_tracker.sample(measured_index)
+                    if not result.cache_hit:
+                        if (
+                            isinstance(cache, SAGESimilarityCache)
+                            and cache.last_decision is not None
+                        ):
+                            decision_payload = {
+                                "candidate_admitted": cache.last_decision.admitted,
+                                "admission_net_delta": cache.last_decision.net_delta,
+                                "incoming_admitted": _optional_value(
+                                    cache.last_decision.incoming_admitted
+                                ),
+                                "promoted": _optional_value(
+                                    cache.last_decision.promoted
+                                ),
+                            }
 
-                if writer is not None:
-                    writer.writerow(
-                        {
-                            "request_index": request.request_index,
-                            "measured": measured,
-                            "created_at": (
-                                request.created_at.isoformat()
-                                if request.created_at is not None
-                                else ""
-                            ),
-                            "pair_index": request.pair_index,
-                            "prompt_id": request.prompt_id,
-                            "response_id": request.response_id,
-                            "policy": policy_name,
-                            "cache_size": cache_size,
-                            "capacity_mode": capacity_mode,
-                            "llm_model": self.config.llm.model,
-                            "hit": result.cache_hit,
-                            "prompt_distance": result.cache_metadata.get(
-                                "prompt_distance", ""
-                            ),
-                            "response_cosine_distance": response_distance,
-                            "backend_latency_ms": result.llm_latency,
-                            "policy_overhead_ms": policy_overhead_ms,
-                            "total_latency_ms": total_latency_ms,
-                            **decision_payload,
-                        }
+                    total_latency_ms = policy_overhead_ms + result.llm_latency
+                    observation = RequestObservation(
+                        measured=measured,
+                        hit=result.cache_hit,
+                        response_cosine_distance=response_distance,
+                        total_latency_ms=total_latency_ms,
+                        policy_overhead_ms=policy_overhead_ms,
                     )
+                    accumulator.record(observation)
+                    if measured:
+                        measured_index = (
+                            request.request_index
+                            - self.config.trace.warmup_requests
+                            + 1
+                        )
+                        resource_tracker.sample(measured_index)
+
+                    if writer is not None:
+                        writer.writerow(
+                            {
+                                "request_index": request.request_index,
+                                "measured": measured,
+                                "created_at": (
+                                    request.created_at.isoformat()
+                                    if request.created_at is not None
+                                    else ""
+                                ),
+                                "pair_index": request.pair_index,
+                                "prompt_id": request.prompt_id,
+                                "response_id": request.response_id,
+                                "policy": policy_name,
+                                "cache_size": cache_size,
+                                "capacity_mode": capacity_mode,
+                                "llm_model": self.config.llm.model,
+                                "source_model": request.source_model or "",
+                                "hit": result.cache_hit,
+                                "prompt_distance": result.cache_metadata.get(
+                                    "prompt_distance", ""
+                                ),
+                                "response_cosine_distance": response_distance,
+                                "backend_latency_ms": result.llm_latency,
+                                "policy_overhead_ms": policy_overhead_ms,
+                                "total_latency_ms": total_latency_ms,
+                                **decision_payload,
+                            }
+                        )
             resource_usage = resource_tracker.finish(
                 len(self._trace) - self.config.trace.warmup_requests
             )
@@ -270,6 +304,9 @@ class ExperimentRunner:
             close = getattr(cache, "close", None)
             if callable(close):
                 close()
+
+        if raw_path is not None and partial_raw_path is not None:
+            partial_raw_path.replace(raw_path)
 
         return accumulator.summary(
             policy_name,
@@ -295,6 +332,25 @@ class ExperimentRunner:
                 decay_half_life_requests=self.config.policy.sage_decay_half_life_requests,
                 admission_margin=self.config.policy.sage_admission_margin,
                 current_request_weight=self.config.policy.sage_current_request_weight,
+                window_fraction=self.config.policy.sage_window_fraction,
+                soft_coverage=self.config.policy.sage_soft_coverage,
+                soft_coverage_power=self.config.policy.sage_soft_coverage_power,
+                recent_history_multiplier=(
+                    self.config.policy.sage_recent_history_multiplier
+                ),
+                recent_history_limit=self.config.policy.sage_recent_history_limit,
+                long_history_capacity=self.config.policy.sage_long_history_capacity,
+                long_history_multiplier=(
+                    self.config.policy.sage_long_history_multiplier
+                ),
+                long_history_limit=self.config.policy.sage_long_history_limit,
+                long_sample_stride=self.config.policy.sage_long_sample_stride,
+                recent_evidence_weight=(
+                    self.config.policy.sage_recent_evidence_weight
+                ),
+                long_decay_half_life_requests=(
+                    self.config.policy.sage_long_decay_half_life_requests
+                ),
             )
         return ExactSemanticBaselineCache(
             BaselineKind(policy_name),
@@ -359,6 +415,7 @@ _RAW_FIELDS = [
     "cache_size",
     "capacity_mode",
     "llm_model",
+    "source_model",
     "hit",
     "prompt_distance",
     "response_cosine_distance",
@@ -367,8 +424,21 @@ _RAW_FIELDS = [
     "total_latency_ms",
     "candidate_admitted",
     "admission_net_delta",
+    "incoming_admitted",
+    "promoted",
 ]
 
 
 def _format_optional(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.4f}"
+
+
+def _optional_value(value: object | None) -> object:
+    return "" if value is None else value
+
+
+def format_duration(seconds: float) -> str:
+    rounded = max(0, round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, remaining_seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{remaining_seconds:02d}"

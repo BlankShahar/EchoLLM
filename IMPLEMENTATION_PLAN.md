@@ -1,173 +1,147 @@
-# SAGE implementation plan and design
+# W-SAGE implementation design
 
-## 1. Objective
+## Objective
 
-For a resident cache set \(C\) and a bounded recent-request window \(W\), SAGE maximizes:
-
-\[
-F(C)=\sum_{q\in W} w(q)\,\mathbf{1}[q\text{ is covered by at least one }e\in C].
-\]
-
-A resident covers a request when their prompt-embedding distance is no larger than the configured semantic-hit threshold. In the hit-rate policy, \(w(q)\) is only a recency weight. Response size, content category, UUIDs, and estimated answer cost are intentionally absent because they are not part of the optimized metric.
-
-For a missed candidate \(x\) and resident victim \(e\), the exact replacement value is:
+W-SAGE keeps EchoLLM's binary semantic-hit rule unchanged:
 
 \[
-\Delta(x,e)=F(C-\{e\}+\{x\})-F(C).
+d(q,e) \le \tau.
 \]
 
-The candidate is admitted only when the best replacement has a delta greater than the configured admission margin. Ties and zero-gain replacements are rejected to avoid churn.
-
-## 2. Framework integration
-
-### New single-pass lookup contract
-
-`CacheLookup` is a Pydantic model with:
-
-- `hit`
-- `response`
-- policy-specific `context`
-- diagnostic `metadata`
-
-`ICache.lookup()` has a backward-compatible default implementation that invokes the old `is_hit()` and `on_hit()` methods. SAGE overrides it to embed and search exactly once.
-
-`EchoLLM.ask()` now calls `lookup()`. On a miss, its context is forwarded to `on_miss()`, allowing SAGE to reuse the already-computed embedding after the LLM returns.
-
-### Compatibility
-
-Old policies do not need to change. They continue through the fallback lookup implementation. SAGE also implements legacy `is_hit()` and `on_hit()` methods with thread-local lookup reuse for code that calls the old interface directly.
-
-## 3. SAGE components
-
-### `SAGESimilarityCache`
-
-Coordinates lookup, admission, persistence, concurrency, statistics, and deterministic tie-breaking.
-
-### `VectorSpace`
-
-Provides exact vectorized cosine, Euclidean, and Manhattan distance. Cosine vectors are normalized on insertion/observation, turning lookup into a matrix-vector product.
-
-### `GhostWindow`
-
-A bounded circular buffer containing:
-
-- recent request vectors;
-- request arrival steps;
-- a Boolean request-by-resident coverage matrix;
-- coverage counts per request.
-
-It contains no responses and cannot serve a hit. Rejected misses remain in the window, so repeated uncovered demand can build admission evidence.
-
-### `SAGEScorer`
-
-Calculates all replacement deltas without recomputing the full objective for every victim.
-
-The candidate's common new gain is the weighted sum of requests that are currently uncovered and that the candidate covers. A victim's loss is the weighted sum of requests uniquely covered by that resident and not recovered by the candidate:
+Only admission and eviction scoring changes. For main-cache residents \(M\),
+demand observations \(Q\), recency weights \(w_q\), and configurable utility
+kernel \(K\):
 
 \[
-\Delta(x,e)=\operatorname{NewGain}(x)-\operatorname{UnrecoveredLoss}(e,x).
+F(M)=\sum_{q\in Q}w_q\max_{e\in M}K(d(q,e)).
 \]
 
-This is mathematically equal to the direct counterfactual objective. Randomized tests compare the vectorized formula against brute-force replacement.
-
-### `SAGEStorage`
-
-The policy performs lookups entirely in memory. Optional SQLite persistence is touched only on admission/replacement. Namespaces isolate experimental runs and deployments. Stored metadata prevents reopening a namespace with an incompatible vector dimension, distance method, or hit threshold.
-
-All runtime configuration and transport/state records are Pydantic models; no dataclasses are used.
-
-## 4. Request lifecycle
-
-### Hit path
-
-1. Embed the request once.
-2. Compute exact distances to active residents.
-3. Record the request and all covering residents in the ghost window.
-4. Return the closest covering resident's response.
-5. Update only the selected resident's last-access step for deterministic tie-breaking.
-
-### Miss path
-
-1. Record the miss in the ghost window during lookup.
-2. Call the LLM outside SAGE's lock.
-3. Reuse the embedding from `CacheLookup.context` when the LLM completes.
-4. Recheck the current residents to prevent concurrent duplicate admission.
-5. Admit directly when a free slot exists.
-6. Otherwise evaluate the candidate against every possible victim.
-7. Replace the best victim only for strictly positive net gain.
-
-### Tie-breaking
-
-Among victims with equal net gain:
-
-1. least recently selected resident;
-2. smallest stable slot index.
-
-LRU is only a tie-breaker and does not alter the coverage objective.
-
-## 5. Complexity
-
-Let:
-
-- \(C\): resident capacity;
-- \(W\): ghost capacity;
-- \(d\): embedding dimension.
-
-Lookup:
+Binary mode uses \(K(d)=1[d\le\tau]\). Soft mode, enabled by default, uses:
 
 \[
-O(Cd)
+K(d)=1[d\le\tau]\left(\max(0,1-d/\tau)\right)^\gamma.
 \]
 
-Full-cache miss admission:
+Thus closer semantic representatives are preferred, but a request cannot become
+a hit merely because soft scoring is enabled.
+
+## Cache partition
+
+The fixed slot array is split into:
+
+- an LRU probation window, default 5% of total capacity;
+- a SAGE-managed main cache.
+
+For capacities greater than one, a non-zero window always receives at least one
+slot and always leaves at least one main slot. Capacity one becomes a pure LRU
+probation cache. Setting `window_fraction=0` provides the direct-admission SAGE
+ablation.
+
+## Request lifecycle
+
+### Lookup
+
+1. Embed the prompt exactly once.
+2. Scan active window and main residents using the configured exact distance.
+3. Return the closest resident satisfying the shared binary hit threshold.
+4. Record demand utilities only against main-cache residents.
+5. Update the selected resident's access time.
+
+### Miss and probation
+
+1. EchoLLM invokes the backend outside the cache lock.
+2. W-SAGE reuses the embedding carried in `CacheLookup.context`.
+3. It rechecks all residents to prevent concurrent semantic duplicates.
+4. The incoming prompt/response is inserted into the probation window.
+5. If the window is full, its LRU resident becomes the main-cache promotion
+   candidate.
+
+The current miss therefore receives temporary residency without forcing itself
+into the long-lived main cache.
+
+### Promotion
+
+If main has a free slot, the exiting window resident is promoted. Otherwise, for
+every main victim \(e\), W-SAGE evaluates:
 
 \[
-O(Wd+WC)
+\Delta(x,e)=F(M-\{e\}+\{x\})-F(M).
 \]
 
-The \(Wd\) term computes candidate-to-window distances; the \(WC\) representation is the coverage matrix, while score aggregation itself is vectorized and effectively \(O(W+C)\).
+The candidate is promoted only when the best delta exceeds the admission margin.
+The incoming item still remains in probation when the exiting candidate is
+rejected.
 
-Memory:
+## Exact soft counterfactual scoring
+
+Each evidence row maintains its highest and second-highest resident utility. For
+a candidate utility \(u_x\), the common gain is:
 
 \[
-O(Cd+Wd+WC).
+\sum_q w_q(\max(u_x,u_1)-u_1).
 \]
 
-The exact implementation is deliberate: it provides a trustworthy research baseline. If profiling later requires optimization, the coverage matrix can be bit-packed and resident lookup can use an ANN candidate stage while retaining exact reranking.
+Only the unique top resident of a row can incur additional replacement loss;
+its corrected post-replacement utility is \(\max(u_x,u_2)\). These corrections
+are aggregated by owner with vectorized NumPy operations. Randomized tests compare
+the optimized result against brute-force replacement for every victim.
 
-## 6. Concurrency and failure safety
+## Recent and long-term evidence
 
-- A re-entrant lock protects in-memory policy state.
-- The lock is never held while the backend LLM runs.
-- Miss completion rechecks current coverage, handling simultaneous semantically similar misses.
-- Slot mutation is rolled back if persistence fails.
-- Fixed resident slots keep ghost-matrix columns stable across replacement.
-- `reset()` clears persistent state by default, avoiding an in-memory/storage split.
+The recent ring stores every observation. When observations age out, every
+`long_sample_stride`-th eviction is inserted into a separate long-term ring.
+The two rings are therefore disjoint.
 
-## 7. Verification plan
+Each horizon has its own capacity, half-life, and normalized score. Their deltas
+are combined with `recent_evidence_weight`. Capacities derive from main-cache
+size using configurable multipliers and hard limits, preventing unbounded
+request-by-resident state.
 
-Automated tests cover:
+## Tie-breaking
 
-1. vectorized versus brute-force deltas;
-2. rejecting one-hit noise;
-3. learning from repeated rejected misses;
-4. exact hit behavior;
-5. Euclidean support;
-6. SQLite restart restoration;
-7. one embedding per EchoLLM request;
-8. OASST1 best-ranked response selection;
-9. quality-adjusted metric denominator.
-10. exact best-delta victim selection;
-11. full chronological trace construction;
-12. zero and automatically resolved unbounded capacities;
-13. framework-native `ILLM.ask()` latency and latency percentiles;
-14. identical memoized `LLMResponse` replay across policies.
+Victims first maximize exact replacement delta. Equal-delta victims are compared
+using fractional responsibility:
 
-Recommended additional large-run checks:
+\[
+R(e)=\sum_q w_q\frac{K(d(q,e))}{\sum_jK(d(q,j))}.
+\]
 
-- phase-shift adaptation with and without decay;
-- ghost-capacity sensitivity;
-- admission-margin sensitivity;
-- exact versus sampled ghost scoring;
-- full chronological OASST1 runs from zero through unbounded capacity;
-- response-quality evaluation with at least one independent evaluator model.
+The lowest-responsibility victim is evicted. LRU and stable slot order are used
+only if both delta and responsibility tie. Per-column non-zero counts provide an
+exact fast path for zero-responsibility residents; remaining responsibility
+calculations are chunked to bound temporary memory.
+
+## Consistency and persistence
+
+Window rotation may move one key from a window slot to a main slot while placing
+the incoming key into the vacated window slot. `SAGEStorage.apply()` writes all
+changed slots in one SQLite transaction. In-memory vectors, keys, responses,
+timestamps, and evidence columns are rolled back together if persistence fails.
+
+Stored metadata includes vector/distance settings, window size, and soft-coverage
+settings. Reopening an incompatible namespace fails explicitly.
+
+## Experiment datasets
+
+OASST1 follows one deterministic root-to-leaf path per conversation tree. At a
+prompter, the selected assistant child is ordered by rank, quality, timestamp,
+and stable ID; at an assistant, the earliest eligible prompter continuation with
+a usable response is selected. Every emitted prompt has one response.
+
+WildChat scans conversations as a stream, extracts adjacent user-to-assistant
+turns, and keeps the globally earliest configured number of assistant-timestamped
+requests using a bounded max-heap. The shipped configuration retains 50,000
+requests and uses the current user message without conversation context.
+
+## Validation invariants
+
+- Window and main masks are disjoint and cover total capacity.
+- Cache size never exceeds total capacity.
+- Window columns never contribute to the SAGE objective.
+- Recent and long observations are disjoint.
+- Utilities remain in `[0, 1]`.
+- Lookup uses one prompt embedding and the closest qualifying resident.
+- Incoming probation insertion and optional main promotion are atomic.
+- Optimized soft deltas equal brute-force deltas.
+- `soft_coverage=False` retains binary coverage behavior.
+- Every policy/capacity experiment starts with a new in-memory cache.

@@ -1,6 +1,6 @@
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal, Self
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -12,7 +12,13 @@ class DatasetSource(StrEnum):
     PARQUET = "parquet"
 
 
+class DatasetKind(StrEnum):
+    OASST1 = "oasst1"
+    WILDCHAT = "wildchat"
+
+
 class ResponseSelection(StrEnum):
+    SINGLE_PATH = "single_path"
     TOP_RANK = "top_rank"
     ALL = "all"
 
@@ -28,27 +34,49 @@ class LLMProvider(StrEnum):
     OLLAMA = "ollama"
 
 
-class DatasetConfig(BaseModel):
+class BaseDatasetConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source: DatasetSource = DatasetSource.HUGGINGFACE
-    dataset_name: str = "OpenAssistant/oasst1"
-    split: str | list[str] = Field(default_factory=lambda: ["train", "validation"])
+    dataset_name: str
+    split: str | list[str]
     local_path: Path | None = None
     language: str | None = None
-    exclude_deleted: bool = False
-    require_positive_review: bool = False
     max_pairs: int | None = Field(default=None, gt=0)
-    response_selection: ResponseSelection = ResponseSelection.ALL
+    streaming: bool = False
 
     @model_validator(mode="after")
-    def validate_local_source(self) -> "DatasetConfig":
+    def validate_local_source(self) -> Self:
         if self.source != DatasetSource.HUGGINGFACE and self.local_path is None:
             raise ValueError("local_path is required for jsonl/parquet datasets")
         splits = [self.split] if isinstance(self.split, str) else self.split
         if not splits or any(not split.strip() for split in splits):
             raise ValueError("split must contain at least one non-empty split name")
         return self
+
+
+class OASST1DatasetConfig(BaseDatasetConfig):
+    kind: Literal[DatasetKind.OASST1] = DatasetKind.OASST1
+    dataset_name: str = "OpenAssistant/oasst1"
+    split: str | list[str] = Field(default_factory=lambda: ["train", "validation"])
+    exclude_deleted: bool = False
+    require_positive_review: bool = False
+    response_selection: ResponseSelection = ResponseSelection.SINGLE_PATH
+
+
+class WildChatDatasetConfig(BaseDatasetConfig):
+    kind: Literal[DatasetKind.WILDCHAT] = DatasetKind.WILDCHAT
+    dataset_name: str = "allenai/WildChat-1M"
+    split: str | list[str] = "train"
+    max_pairs: int | None = Field(default=50_000, gt=0)
+    streaming: bool = True
+    source_models: tuple[str, ...] | None = None
+
+
+DatasetConfig = Annotated[
+    OASST1DatasetConfig | WildChatDatasetConfig,
+    Field(discriminator="kind"),
+]
 
 
 class EmbeddingConfig(BaseModel):
@@ -111,10 +139,21 @@ class PolicyConfig(BaseModel):
     )
     include_unbounded_cache: bool = True
     hit_distance_threshold: float = Field(default=0.25, ge=0.0)
-    sage_ghost_capacity: int = Field(default=4096, gt=0)
-    sage_decay_half_life_requests: float | None = Field(default=2048, gt=0.0)
+    sage_ghost_capacity: int | None = Field(default=None, gt=0)
+    sage_decay_half_life_requests: float | None = Field(default=512, gt=0.0)
     sage_admission_margin: float = Field(default=0.0, ge=0.0)
     sage_current_request_weight: float = Field(default=0.1, ge=0.0, le=1.0)
+    sage_window_fraction: float = Field(default=0.05, ge=0.0, le=1.0)
+    sage_soft_coverage: bool = True
+    sage_soft_coverage_power: float = Field(default=1.0, gt=0.0)
+    sage_recent_history_multiplier: float = Field(default=4.0, gt=0.0)
+    sage_recent_history_limit: int = Field(default=4096, gt=0)
+    sage_long_history_capacity: int | None = Field(default=None, gt=0)
+    sage_long_history_multiplier: float = Field(default=8.0, gt=0.0)
+    sage_long_history_limit: int = Field(default=8192, gt=0)
+    sage_long_sample_stride: int = Field(default=8, gt=0)
+    sage_recent_evidence_weight: float = Field(default=0.7, ge=0.0, le=1.0)
+    sage_long_decay_half_life_requests: float | None = Field(default=32768, gt=0.0)
 
     @model_validator(mode="after")
     def validate_policy_values(self) -> "PolicyConfig":
@@ -152,7 +191,7 @@ class ResourceConfig(BaseModel):
 class ExperimentConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    dataset: DatasetConfig = DatasetConfig()
+    dataset: DatasetConfig = Field(default_factory=OASST1DatasetConfig)
     embedding: EmbeddingConfig = EmbeddingConfig()
     trace: TraceConfig = TraceConfig()
     llm: LLMConfig = LLMConfig()

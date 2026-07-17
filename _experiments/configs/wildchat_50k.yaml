@@ -1,13 +1,12 @@
 dataset:
-  kind: oasst1
+  kind: wildchat
   source: huggingface
-  dataset_name: OpenAssistant/oasst1
-  split: [train, validation]
+  dataset_name: allenai/WildChat-1M
+  split: train
   language: null
-  exclude_deleted: false
-  require_positive_review: false
-  max_pairs: null
-  response_selection: single_path
+  source_models: null
+  max_pairs: 50000
+  streaming: true
 
 embedding:
   prompt_model_name: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
@@ -63,6 +62,6 @@ resources:
 
 output:
   directory: results
-  run_name: oasst1_single_path_wsage
+  run_name: wildchat_50k_sage
   write_raw_results: true
   generate_plots: true

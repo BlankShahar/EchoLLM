@@ -51,3 +51,24 @@ class VectorSpace:
 
     def covers(self, matrix: np.ndarray, vector: np.ndarray, threshold: float) -> np.ndarray:
         return self.distances(matrix, vector) <= threshold
+
+    def utilities(
+        self,
+        matrix: np.ndarray,
+        vector: np.ndarray,
+        threshold: float,
+        *,
+        soft: bool,
+        power: float,
+    ) -> np.ndarray:
+        """Return scoring utility without changing the binary cache-hit rule."""
+        distances = self.distances(matrix, vector)
+        if not soft:
+            return (distances <= threshold).astype(np.float32)
+        if threshold == 0.0:
+            return np.isclose(distances, 0.0, rtol=0.0, atol=1e-7).astype(np.float32)
+        utilities = np.clip(1.0 - distances / threshold, 0.0, 1.0)
+        if power != 1.0:
+            utilities = np.power(utilities, power)
+        utilities[distances > threshold] = 0.0
+        return utilities.astype(np.float32, copy=False)

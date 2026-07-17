@@ -57,6 +57,7 @@ def build_trace(
                 prompt=pair.prompt,
                 reference_response=pair.reference_response,
                 created_at=pair.created_at,
+                source_model=pair.source_model,
             )
         )
     return trace

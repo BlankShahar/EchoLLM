@@ -21,6 +21,20 @@ def test_chronological_trace_uses_every_pair_once_by_default() -> None:
     assert len(trace) == len(pairs)
 
 
+def test_trace_preserves_dataset_source_model() -> None:
+    pair = _pair(0, "prompt", "2023-02-01T00:00:00+00:00").model_copy(
+        update={"source_model": "gpt-4-0314"}
+    )
+
+    trace = build_trace(
+        [pair],
+        np.ones((1, 1), dtype=np.float32),
+        TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+    )
+
+    assert trace[0].source_model == "gpt-4-0314"
+
+
 def _pair(index: int, prompt: str, created_at: str) -> PromptResponsePair:
     return PromptResponsePair(
         pair_index=index,
