@@ -64,7 +64,7 @@ are not converted into repeated requests.
 
 The WildChat loader extracts adjacent user-to-assistant turns, uses only the
 current user message as the prompt, globally sorts by assistant completion time,
-and retains the earliest 50,000 valid requests. Original model names are kept as
+and retains the earliest 15,000 valid requests. Original model names are kept as
 result metadata but are not added to cache keys.
 
 ## Run locally
@@ -76,7 +76,7 @@ python -m _experiments.run \
   --config _experiments/configs/oasst1_default.yaml
 
 python -m _experiments.run \
-  --config _experiments/configs/wildchat_50k.yaml
+  --config _experiments/configs/wildchat_15k.yaml
 ```
 
 Ollama generates each unique prompt once. Its real `LLMResponse`, including the
@@ -90,7 +90,7 @@ From the repository root:
 ```bash
 git pull
 sbatch _experiments/slurm/run_oasst1.sbatch
-sbatch _experiments/slurm/run_wildchat_50k.sbatch
+sbatch _experiments/slurm/run_wildchat_15k.sbatch
 ```
 
 To run WildChat only after OASST1 succeeds:
@@ -98,7 +98,7 @@ To run WildChat only after OASST1 succeeds:
 ```bash
 OASST_JOB=$(sbatch --parsable _experiments/slurm/run_oasst1.sbatch)
 sbatch --dependency="afterok:$OASST_JOB" \
-  _experiments/slurm/run_wildchat_50k.sbatch
+  _experiments/slurm/run_wildchat_15k.sbatch
 ```
 
 The scripts use the submission directory as the source checkout, copy a fresh

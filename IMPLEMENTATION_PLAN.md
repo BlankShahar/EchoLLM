@@ -130,7 +130,7 @@ a usable response is selected. Every emitted prompt has one response.
 
 WildChat scans conversations as a stream, extracts adjacent user-to-assistant
 turns, and keeps the globally earliest configured number of assistant-timestamped
-requests using a bounded max-heap. The shipped configuration retains 50,000
+requests using a bounded max-heap. The shipped configuration retains 15,000
 requests and uses the current user message without conversation context.
 
 ## Validation invariants

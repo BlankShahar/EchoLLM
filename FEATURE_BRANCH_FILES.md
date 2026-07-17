@@ -17,10 +17,10 @@
 - `_experiments/trace.py`: shared trace construction.
 - `_experiments/runner.py`: policy replay, metrics, progress, raw outputs, and plots.
 - `_experiments/configs/oasst1_default.yaml`: OASST1 W-SAGE experiment.
-- `_experiments/configs/wildchat_50k.yaml`: first-50K WildChat experiment.
+- `_experiments/configs/wildchat_15k.yaml`: first-15K WildChat experiment.
 - `_experiments/slurm/run_experiment.sh`: shared cluster runtime.
 - `_experiments/slurm/run_oasst1.sbatch`: OASST1 Slurm entry point.
-- `_experiments/slurm/run_wildchat_50k.sbatch`: WildChat Slurm entry point.
+- `_experiments/slurm/run_wildchat_15k.sbatch`: WildChat Slurm entry point.
 
 ## Validation
 

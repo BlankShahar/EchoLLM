@@ -25,7 +25,7 @@ The WildChat loader flattens every adjacent user-to-assistant transition into a
 request/reference-response pair. The request is only the current user message,
 not the preceding conversation context. Ordering uses the assistant turn's UTC
 completion timestamp. The loader scans the dataset as a stream and keeps a
-bounded heap containing the globally earliest 50,000 usable requests, so it does
+bounded heap containing the globally earliest 15,000 usable requests, so it does
 not materialize every flattened request in memory.
 
 The original WildChat model is retained as source metadata; all requests are
@@ -140,7 +140,7 @@ are NumPy/CPU operations.
 ## Configuration
 
 Edit `_experiments/configs/oasst1_default.yaml` or
-`_experiments/configs/wildchat_50k.yaml`.
+`_experiments/configs/wildchat_15k.yaml`.
 
 Important fields:
 
@@ -208,17 +208,17 @@ git pull
 sbatch _experiments/slurm/run_oasst1.sbatch
 ```
 
-Run the 50,000-request WildChat experiment separately with:
+Run the 15,000-request WildChat experiment separately with:
 
 ```bash
-sbatch _experiments/slurm/run_wildchat_50k.sbatch
+sbatch _experiments/slurm/run_wildchat_15k.sbatch
 ```
 
 To start WildChat only after OASST1 succeeds:
 
 ```bash
 OASST_JOB=$(sbatch --parsable _experiments/slurm/run_oasst1.sbatch)
-sbatch --dependency="afterok:$OASST_JOB" _experiments/slurm/run_wildchat_50k.sbatch
+sbatch --dependency="afterok:$OASST_JOB" _experiments/slurm/run_wildchat_15k.sbatch
 ```
 
 Submit these commands from the repository root. Each script snapshots the

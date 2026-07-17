@@ -43,7 +43,7 @@ def test_loader_flattens_adjacent_user_assistant_turns_without_context() -> None
         rows,
         language=None,
         source_models=None,
-        max_pairs=50_000,
+        max_pairs=15_000,
     )
 
     assert [pair.prompt for pair in pairs] == ["First question", "Follow-up only"]
@@ -91,20 +91,20 @@ def test_loader_skips_malformed_pairs_and_filters_source_model() -> None:
         [missing_timestamp, wrong_model, accepted],
         language="English",
         source_models=("gpt-4-0314",),
-        max_pairs=50_000,
+        max_pairs=15_000,
     )
 
     assert [pair.prompt for pair in pairs] == ["accepted prompt"]
 
 
-def test_default_wildchat_config_caps_chronological_requests_at_50k() -> None:
+def test_default_wildchat_config_caps_chronological_requests_at_15k() -> None:
     config = ExperimentConfig.from_yaml(
-        Path("_experiments/configs/wildchat_50k.yaml")
+        Path("_experiments/configs/wildchat_15k.yaml")
     )
 
     assert isinstance(config.dataset, WildChatDatasetConfig)
     assert config.dataset.dataset_name == "allenai/WildChat-1M"
-    assert config.dataset.max_pairs == 50_000
+    assert config.dataset.max_pairs == 15_000
     assert config.dataset.streaming
     assert config.trace.request_count is None
 

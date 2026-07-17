@@ -5,7 +5,7 @@ dataset:
   split: train
   language: null
   source_models: null
-  max_pairs: 50000
+  max_pairs: 15000
   streaming: true
 
 embedding:
@@ -34,7 +34,7 @@ llm:
 
 policy:
   policies: [LRU, LFU, FIFO, RR, SAGE]
-  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000]
+  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
   include_unbounded_cache: true
   hit_distance_threshold: 0.25
   sage_ghost_capacity: null
@@ -62,6 +62,6 @@ resources:
 
 output:
   directory: results
-  run_name: wildchat_50k_sage
+  run_name: wildchat_15k_sage
   write_raw_results: true
   generate_plots: true

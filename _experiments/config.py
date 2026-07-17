@@ -68,7 +68,7 @@ class WildChatDatasetConfig(BaseDatasetConfig):
     kind: Literal[DatasetKind.WILDCHAT] = DatasetKind.WILDCHAT
     dataset_name: str = "allenai/WildChat-1M"
     split: str | list[str] = "train"
-    max_pairs: int | None = Field(default=50_000, gt=0)
+    max_pairs: int | None = Field(default=15_000, gt=0)
     streaming: bool = True
     source_models: tuple[str, ...] | None = None
 
