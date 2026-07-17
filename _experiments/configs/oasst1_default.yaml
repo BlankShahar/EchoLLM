@@ -35,7 +35,7 @@ llm:
 
 policy:
   policies: [LRU, LFU, FIFO, RR, SAGE]
-  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000]
+  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
   include_unbounded_cache: true
   hit_distance_threshold: 0.25
   sage_ghost_capacity: null

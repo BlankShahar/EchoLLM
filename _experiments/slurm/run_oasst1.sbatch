@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH --partition=main
-#SBATCH --time=7-00:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --job-name=echollm-wsage-oasst1
-#SBATCH --output=echollm-wsage-oasst1-%j.out
+#SBATCH --output=echollm-wsage-oasst1-%A_%a.out
+#SBATCH --array=0-49%8
 #SBATCH --mem=58G
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus=rtx_6000:1
@@ -11,7 +12,7 @@ EXPERIMENT_CONFIG_RELATIVE="_experiments/configs/oasst1_default.yaml"
 RUN_PREFIX="oasst1-wsage"
 DATASET_LABEL="OASST1 single-path trace"
 
-COMMON_SCRIPT="${SLURM_SUBMIT_DIR:-$PWD}/_experiments/slurm/run_experiment.sh"
+COMMON_SCRIPT="${SOURCE_PATH:-${SLURM_SUBMIT_DIR:-$PWD}}/_experiments/slurm/run_experiment.sh"
 if [[ ! -f "$COMMON_SCRIPT" ]]; then
   echo "Run this command from the EchoLLM repository root:" >&2
   echo "  sbatch _experiments/slurm/run_oasst1.sbatch" >&2

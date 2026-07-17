@@ -15,6 +15,16 @@ def main() -> None:
     parser.add_argument("--device", help="Override embedding.device, for example cuda or cpu")
     parser.add_argument("--model", help="Override llm.model")
     parser.add_argument("--ollama-host", help="Override llm.host")
+    parser.add_argument(
+        "--run-index",
+        type=int,
+        help="Run only this zero-based policy/capacity grid entry",
+    )
+    parser.add_argument(
+        "--skip-plots",
+        action="store_true",
+        help="Do not generate plots (used by array tasks before aggregation)",
+    )
     arguments = parser.parse_args()
     pipeline_started = perf_counter()
     status = "failed"
@@ -42,11 +52,13 @@ def main() -> None:
             output_updates["directory"] = Path(arguments.output_dir)
         if arguments.run_name:
             output_updates["run_name"] = arguments.run_name
+        if arguments.skip_plots:
+            output_updates["generate_plots"] = False
         if output_updates:
             config_updates["output"] = config.output.model_copy(update=output_updates)
         if config_updates:
             config = config.model_copy(update=config_updates)
-        output = ExperimentRunner.from_config(config).run()
+        output = ExperimentRunner.from_config(config).run(run_index=arguments.run_index)
         status = "completed"
         print(output)
     finally:

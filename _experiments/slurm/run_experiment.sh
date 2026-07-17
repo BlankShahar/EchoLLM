@@ -17,15 +17,29 @@ EXPERIMENT_PATH="${EXPERIMENT_PATH:-$HOME/_experiments/echollm-sage}"
 SOURCE_PATH="${SOURCE_PATH:-${SLURM_SUBMIT_DIR:-$PWD}}"
 MODEL="${MODEL:-qwen3:8b}"
 
-JOB_ROOT="$EXPERIMENT_PATH/jobs/$SLURM_JOB_ID"
+ARRAY_JOB_ID="${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}"
+ARRAY_TASK_ID="${SLURM_ARRAY_TASK_ID:-}"
+if [[ -n "$ARRAY_TASK_ID" ]]; then
+  TASK_NAME=$(printf 'task-%03d' "$ARRAY_TASK_ID")
+  JOB_ROOT="$EXPERIMENT_PATH/jobs/$ARRAY_JOB_ID/$TASK_NAME"
+  RESULT_GROUP="$RUN_PREFIX-$ARRAY_JOB_ID"
+  RESULTS_OUTPUT_ROOT="$EXPERIMENT_PATH/results/$RESULT_GROUP/tasks"
+  RUN_NAME="$TASK_NAME"
+  RUN_SELECTION_ARGS=(--run-index "$ARRAY_TASK_ID" --skip-plots)
+else
+  JOB_ROOT="$EXPERIMENT_PATH/jobs/$SLURM_JOB_ID"
+  RESULT_GROUP="$RUN_PREFIX-$SLURM_JOB_ID"
+  RESULTS_OUTPUT_ROOT="$EXPERIMENT_PATH/results"
+  RUN_NAME="$RESULT_GROUP"
+  RUN_SELECTION_ARGS=()
+fi
 CODE_PATH="$JOB_ROOT/code"
 LOG_PATH="$JOB_ROOT/logs"
-RESULTS_ROOT="$EXPERIMENT_PATH/results"
-RUN_NAME="$RUN_PREFIX-$SLURM_JOB_ID"
 HF_HOME="${HF_HOME:-$EXPERIMENT_PATH/huggingface-cache}"
-EMBEDDING_CACHE="$EXPERIMENT_PATH/embedding-cache/$RUN_PREFIX.sqlite3"
+EMBEDDING_CACHE="$JOB_ROOT/embedding-cache.sqlite3"
 OLLAMA_LOG="$LOG_PATH/ollama.log"
-OLLAMA_PORT="${OLLAMA_PORT:-$((20000 + SLURM_JOB_ID % 10000))}"
+PORT_SEED=$(printf '%s' "${ARRAY_JOB_ID}_${ARRAY_TASK_ID:-single}" | cksum | awk '{print $1}')
+OLLAMA_PORT="${OLLAMA_PORT:-$((20000 + PORT_SEED % 40000))}"
 OLLAMA_BIND="127.0.0.1:$OLLAMA_PORT"
 OLLAMA_URL="http://$OLLAMA_BIND"
 
@@ -63,7 +77,7 @@ cleanup() {
     status="completed"
   fi
   echo "Job $status after $(format_duration "$elapsed") ($elapsed seconds)."
-  echo "Results: $RESULTS_ROOT/$RUN_NAME"
+  echo "Results: $RESULTS_OUTPUT_ROOT/$RUN_NAME"
   echo "Logs: $LOG_PATH"
   exit "$ec"
 }
@@ -80,9 +94,9 @@ fi
 mkdir -p \
   "$JOB_ROOT" \
   "$LOG_PATH" \
-  "$RESULTS_ROOT" \
+  "$RESULTS_OUTPUT_ROOT" \
   "$HF_HOME" \
-  "$(dirname "$EMBEDDING_CACHE")"
+  "$EXPERIMENT_PATH/locks"
 
 echo "Copying a fresh working tree from $SOURCE_PATH..."
 mkdir -p "$CODE_PATH"
@@ -107,8 +121,11 @@ echo "Activating Python environment..."
 eval "$(/storage/modules/packages/anaconda/bin/conda shell.bash hook)"
 conda activate py313
 
-echo "Installing experiment requirements..."
+echo "Ensuring experiment requirements are installed..."
+exec 8>"$EXPERIMENT_PATH/locks/python-environment.lock"
+flock 8
 python -m pip install -q -r "$CODE_PATH/requirements-experiments.txt"
+flock -u 8
 
 export HF_HOME
 export TOKENIZERS_PARALLELISM=true
@@ -146,7 +163,10 @@ if [[ "$OLLAMA_READY" -ne 1 ]]; then
 fi
 
 echo "Pulling model $MODEL (no-op when already available)..."
+exec 9>"$EXPERIMENT_PATH/locks/ollama-model.lock"
+flock 9
 ollama pull "$MODEL" >"$LOG_PATH/ollama_pull.log" 2>&1
+flock -u 9
 echo "Warming up Ollama on the allocated GPU..."
 echo "Warm up GPU" | ollama run "$MODEL" \
   >"$LOG_PATH/gpu-check.out" \
@@ -163,14 +183,19 @@ cd "$CODE_PATH"
 echo "Checking PyTorch CUDA access..."
 srun python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 
-echo "Running all policy/capacity experiments..."
+if [[ -n "$ARRAY_TASK_ID" ]]; then
+  echo "Running experiment grid index $ARRAY_TASK_ID..."
+else
+  echo "Running all policy/capacity experiments..."
+fi
 srun python -m _experiments.run \
   --config "$CONFIG_PATH" \
   --model "$MODEL" \
   --ollama-host "$OLLAMA_URL" \
   --device cuda \
   --embedding-cache-path "$EMBEDDING_CACHE" \
-  --output-dir "$RESULTS_ROOT" \
-  --run-name "$RUN_NAME"
+  --output-dir "$RESULTS_OUTPUT_ROOT" \
+  --run-name "$RUN_NAME" \
+  "${RUN_SELECTION_ARGS[@]}"
 
 echo "Experiment completed successfully."

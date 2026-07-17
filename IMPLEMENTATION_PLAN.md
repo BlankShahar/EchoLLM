@@ -145,3 +145,5 @@ requests and uses the current user message without conversation context.
 - Optimized soft deltas equal brute-force deltas.
 - `soft_coverage=False` retains binary coverage behavior.
 - Every policy/capacity experiment starts with a new in-memory cache.
+- Slurm assigns every policy/capacity pair to an isolated array task.
+- Aggregation succeeds only when every expected grid entry is present exactly once.

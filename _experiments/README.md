@@ -47,6 +47,12 @@ The default trace is `chronological` over all extracted requests from the combin
 train and validation splits, with no synthetic repetition and no warm-up
 exclusion. Other modes remain available for controlled workload studies.
 
+Every request in that trace is passed to `EchoLLM`. Each cache miss performs a
+new backend `ILLM.ask()` call, including a repeated exact prompt that is no
+longer resident; only a real cache hit avoids the backend. Quality-evaluation
+embeddings may be reused, but generated responses and backend latencies are not
+memoized by the experiment layer.
+
 The capacity sweep accepts zero. `include_unbounded_cache: true` adds a final
 capacity equal to the number of unique prompt strings in the actual trace, which
 is sufficient to avoid capacity eviction. Every policy/capacity run constructs
@@ -205,38 +211,37 @@ For the cluster workflow:
 
 ```bash
 git pull
-sbatch _experiments/slurm/run_oasst1.sbatch
+MAX_CONCURRENT=8 bash _experiments/slurm/submit_oasst1_array.sh
 ```
 
 Run the 15,000-request WildChat experiment separately with:
 
 ```bash
-sbatch _experiments/slurm/run_wildchat_15k.sbatch
+MAX_CONCURRENT=8 bash _experiments/slurm/submit_wildchat_15k_array.sh
 ```
 
-To start WildChat only after OASST1 succeeds:
+Submit both arrays concurrently with:
 
 ```bash
-OASST_JOB=$(sbatch --parsable _experiments/slurm/run_oasst1.sbatch)
-sbatch --dependency="afterok:$OASST_JOB" _experiments/slurm/run_wildchat_15k.sbatch
+MAX_CONCURRENT=8 bash _experiments/slurm/submit_both_arrays.sh
 ```
 
-Submit these commands from the repository root. Each script snapshots the
-updated worktree, selects a job-specific localhost port, starts and verifies
-Ollama on CUDA, runs sentence-transformer embeddings on CUDA, and keeps results
-outside the temporary code copy. Override the defaults when needed, for
-example:
+Each dataset submits 50 independent GPU tasks, one per policy/capacity pair.
+`MAX_CONCURRENT` is the per-dataset concurrency ceiling, so submitting both with
+the default can use up to 16 GPUs. Slurm schedules fewer when resources are not
+available. Each array has a dependent CPU aggregation job that runs only after
+all 50 tasks succeed. Override the defaults when needed, for example:
 
 ```bash
-MODEL=llama3.2:1b sbatch _experiments/slurm/run_oasst1.sbatch
+MODEL=llama3.2:1b MAX_CONCURRENT=16 \
+  bash _experiments/slurm/submit_oasst1_array.sh
 ```
 
-The Slurm output contains a tqdm request-progress bar for every policy and
-capacity, completion time for every such experiment, and total pipeline/job
-time. Ollama startup and CUDA diagnostics remain under the job's `logs`
-directory, but its repetitive `[GIN]` HTTP access records are filtered out.
-Completed raw CSV files are atomically published; an interrupted policy run
-leaves a `.partial` file instead of presenting incomplete data as final output.
+Every task log contains one 14K/15K request progress bar and its duration. Logs
+are named with the array and task IDs (`%A_%a`). Ollama startup and CUDA
+diagnostics remain under that task's `logs` directory, while repetitive `[GIN]`
+records are filtered. Completed raw CSV files are atomically published; failed
+tasks prevent aggregation and retain `.partial` output for diagnosis.
 
 ## Raw output schema
 

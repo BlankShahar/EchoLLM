@@ -15,12 +15,14 @@
 - `_experiments/oasst1.py`: deterministic single-path OASST1 extraction.
 - `_experiments/wildchat.py`: bounded-memory chronological WildChat extraction.
 - `_experiments/trace.py`: shared trace construction.
-- `_experiments/runner.py`: policy replay, metrics, progress, raw outputs, and plots.
+- `_experiments/runner.py`: full-grid or single-index policy replay and metrics.
+- `_experiments/aggregate.py`: validates and combines Slurm-array task outputs.
 - `_experiments/configs/oasst1_default.yaml`: OASST1 W-SAGE experiment.
 - `_experiments/configs/wildchat_15k.yaml`: first-15K WildChat experiment.
 - `_experiments/slurm/run_experiment.sh`: shared cluster runtime.
-- `_experiments/slurm/run_oasst1.sbatch`: OASST1 Slurm entry point.
-- `_experiments/slurm/run_wildchat_15k.sbatch`: WildChat Slurm entry point.
+- `_experiments/slurm/run_oasst1.sbatch`: 50-task OASST1 array.
+- `_experiments/slurm/run_wildchat_15k.sbatch`: 50-task WildChat array.
+- `_experiments/slurm/submit_*_array.sh`: array plus dependent aggregation submission.
 
 ## Validation
 

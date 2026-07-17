@@ -79,9 +79,11 @@ python -m _experiments.run \
   --config _experiments/configs/wildchat_15k.yaml
 ```
 
-Ollama generates each unique prompt once. Its real `LLMResponse`, including the
-measured backend latency, is memoized and replayed identically across every
-policy/capacity run.
+Every trace request is sent through `EchoLLM`. A cache miss always calls Ollama,
+even when the exact prompt appeared earlier in the trace; only a cache hit skips
+the backend. The `LLMResponse.latency` from that live call is recorded for the
+request. Response embeddings used only for quality evaluation may be reused and
+do not affect cache behavior or the measured backend/cache latency.
 
 ## Run on Slurm
 
@@ -89,31 +91,30 @@ From the repository root:
 
 ```bash
 git pull
-sbatch _experiments/slurm/run_oasst1.sbatch
-sbatch _experiments/slurm/run_wildchat_15k.sbatch
+MAX_CONCURRENT=8 bash _experiments/slurm/submit_both_arrays.sh
 ```
 
-To run WildChat only after OASST1 succeeds:
+Or submit one dataset:
 
 ```bash
-OASST_JOB=$(sbatch --parsable _experiments/slurm/run_oasst1.sbatch)
-sbatch --dependency="afterok:$OASST_JOB" \
-  _experiments/slurm/run_wildchat_15k.sbatch
+MAX_CONCURRENT=8 bash _experiments/slurm/submit_oasst1_array.sh
+MAX_CONCURRENT=8 bash _experiments/slurm/submit_wildchat_15k_array.sh
 ```
 
-The scripts use the submission directory as the source checkout, copy a fresh
-job-local worktree, start Ollama on a job-specific localhost port, verify CUDA,
-and preserve results outside the temporary copy. Override the backend model if
-needed:
+Each dataset is a 50-task job array: one full trace replay for each of five
+policies and ten capacities, including unbounded. `MAX_CONCURRENT` limits the
+number of GPUs used simultaneously per dataset. A dependent CPU job validates
+all tasks, combines their results, and generates the final plots. Override the
+backend model if needed:
 
 ```bash
-MODEL=llama3.2:1b sbatch _experiments/slurm/run_oasst1.sbatch
+MODEL=llama3.2:1b MAX_CONCURRENT=16 \
+  bash _experiments/slurm/submit_oasst1_array.sh
 ```
 
-Ollama's repetitive `[GIN]` request lines are filtered from its log. The Slurm
-output contains LLM-generation progress, one tqdm request bar per
-policy/capacity experiment, each experiment's duration, and total pipeline/job
-duration.
+Every task has an isolated worktree, cache, Ollama port, log directory, and
+result directory. Ollama's repetitive `[GIN]` lines are filtered. Task logs use
+`%A_%a`, for example `echollm-wsage-oasst1-12345_7.out`.
 
 ## Results
 
@@ -121,12 +122,14 @@ Each run writes:
 
 ```text
 <results>/<run-name>/
-|-- config.json
+|-- experiment_config.yaml
 |-- dataset_stats.json
 |-- summary.csv
 |-- summary.json
 |-- raw/*.csv.gz
-`-- plots/*.png
+|-- plots/*.png
+|-- aggregation.json
+`-- tasks/task-*/summary.csv
 ```
 
 Raw results are first written as `.partial` files and published atomically only

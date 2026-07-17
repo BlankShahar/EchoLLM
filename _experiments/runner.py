@@ -24,7 +24,7 @@ from .embeddings import (
     PrecomputedEmbedder,
     SentenceTransformerEmbeddingProvider,
 )
-from .llm import MemoizedLLM, ReferenceLLM, build_llm
+from .llm import ReferenceLLM, build_llm
 from .metrics import MetricsAccumulator, RequestObservation, RunSummary
 from .models import PromptResponsePair, TraceRequest
 from .plotting import generate_plots
@@ -63,7 +63,7 @@ class ExperimentRunner:
         backend = llm or ReferenceLLM(
             {pair.prompt: pair.reference_response for pair in pairs}
         )
-        self._llm = MemoizedLLM(backend)
+        self._llm = backend
         self._quality_provider = quality_provider
         self._trace = build_trace(pairs, self.prompt_embeddings, config.trace)
 
@@ -91,7 +91,7 @@ class ExperimentRunner:
             quality_provider=quality_provider,
         )
 
-    def run(self) -> Path:
+    def run(self, run_index: int | None = None) -> Path:
         run_directory = self.config.output.directory / self.config.output.run_name
         raw_directory = run_directory / "raw"
         run_directory.mkdir(parents=True, exist_ok=True)
@@ -122,42 +122,58 @@ class ExperimentRunner:
             f"{len({request.prompt for request in self._trace})} unique prompt strings",
             flush=True,
         )
-        self._prepare_llm_responses()
-
         summaries: list[RunSummary] = []
-        capacity_runs = self._capacity_runs()
-        total_runs = len(capacity_runs) * len(self.config.policy.policies)
-        run_index = 0
-        for cache_size, capacity_mode in capacity_runs:
-            for policy_name in self.config.policy.policies:
-                run_index += 1
-                print(
-                    f"[{run_index}/{total_runs}] Running {policy_name} "
-                    f"at capacity {cache_size} ({capacity_mode})...",
-                    flush=True,
-                )
-                experiment_started = perf_counter()
-                summary = self._run_one(
-                    policy_name,
-                    cache_size,
-                    capacity_mode,
-                    raw_directory,
-                )
-                summaries.append(summary)
-                self._write_summaries(run_directory, summaries)
-                experiment_seconds = perf_counter() - experiment_started
-                print(
-                    f"[{run_index}/{total_runs}] {policy_name}: "
-                    f"hit_rate={summary.hit_rate:.4f}, "
-                    f"semantic_accuracy={_format_optional(summary.mean_hit_semantic_accuracy)}, "
-                    f"mean_latency_ms={summary.mean_latency_ms:.2f}; "
-                    f"completed in {format_duration(experiment_seconds)}",
-                    flush=True,
-                )
+        grid = self.run_grid()
+        selected_runs = grid if run_index is None else [self._select_run(grid, run_index)]
+        total_runs = len(grid)
+        for policy_name, cache_size, capacity_mode, selected_index in selected_runs:
+            display_index = selected_index + 1
+            print(
+                f"[{display_index}/{total_runs}] Running {policy_name} "
+                f"at capacity {cache_size} ({capacity_mode})...",
+                flush=True,
+            )
+            experiment_started = perf_counter()
+            summary = self._run_one(
+                policy_name,
+                cache_size,
+                capacity_mode,
+                raw_directory,
+            )
+            summaries.append(summary)
+            self._write_summaries(run_directory, summaries)
+            experiment_seconds = perf_counter() - experiment_started
+            print(
+                f"[{display_index}/{total_runs}] {policy_name}: "
+                f"hit_rate={summary.hit_rate:.4f}, "
+                f"semantic_accuracy={_format_optional(summary.mean_hit_semantic_accuracy)}, "
+                f"mean_latency_ms={summary.mean_latency_ms:.2f}; "
+                f"completed in {format_duration(experiment_seconds)}",
+                flush=True,
+            )
 
         if self.config.output.generate_plots:
             generate_plots(run_directory)
         return run_directory
+
+    def run_grid(self) -> list[tuple[str, int, str, int]]:
+        grid: list[tuple[str, int, str, int]] = []
+        for cache_size, capacity_mode in self._capacity_runs():
+            for policy_name in self.config.policy.policies:
+                grid.append((policy_name, cache_size, capacity_mode, len(grid)))
+        return grid
+
+    @staticmethod
+    def _select_run(
+        grid: list[tuple[str, int, str, int]],
+        run_index: int,
+    ) -> tuple[str, int, str, int]:
+        if run_index < 0 or run_index >= len(grid):
+            raise ValueError(
+                f"run_index {run_index} is outside the experiment grid "
+                f"[0, {len(grid) - 1}]"
+            )
+        return grid[run_index]
 
     @staticmethod
     def _write_summaries(run_directory: Path, summaries: list[RunSummary]) -> None:
@@ -382,26 +398,14 @@ class ExperimentRunner:
     def _response_distance(self, returned: str, reference: str) -> float:
         returned_vector = self._response_vectors.get(returned)
         reference_vector = self._response_vectors.get(reference)
-        if returned_vector is None or reference_vector is None:
-            raise KeyError("Response embedding missing from the precomputed experiment set")
+        if returned_vector is None:
+            if self._quality_provider is None:
+                raise KeyError("Generated response requires a quality embedding provider")
+            returned_vector = self._quality_provider.embed_many([returned])[0]
+            self._response_vectors[returned] = returned_vector
+        if reference_vector is None:
+            raise KeyError("Reference response embedding is missing")
         return cosine_distance(tuple(returned_vector), tuple(reference_vector))
-
-    def _prepare_llm_responses(self) -> None:
-        self._llm.prime(request.prompt for request in self._trace)
-        generated = [response.response for response in self._llm.responses.values()]
-        missing = list(
-            dict.fromkeys(
-                response
-                for response in generated
-                if response not in self._response_vectors
-            )
-        )
-        if not missing:
-            return
-        if self._quality_provider is None:
-            raise KeyError("Generated responses require a quality embedding provider")
-        vectors = self._quality_provider.embed_many(missing)
-        self._response_vectors.update(zip(missing, vectors, strict=True))
 
 
 _RAW_FIELDS = [

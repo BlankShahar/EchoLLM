@@ -36,6 +36,27 @@ def test_capacity_runs_include_zero_and_resolved_unbounded() -> None:
     ]
 
 
+def test_run_grid_has_stable_capacity_then_policy_order() -> None:
+    runner = _runner(
+        pairs=[_pair(0), _pair(1)],
+        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+        policy=PolicyConfig(
+            policies=["LRU", "SAGE"],
+            cache_sizes=[0, 1],
+            include_unbounded_cache=True,
+        ),
+    )
+
+    assert runner.run_grid() == [
+        ("LRU", 0, "no_cache", 0),
+        ("SAGE", 0, "no_cache", 1),
+        ("LRU", 1, "bounded", 2),
+        ("SAGE", 1, "bounded", 3),
+        ("LRU", 2, "unbounded", 4),
+        ("SAGE", 2, "unbounded", 5),
+    ]
+
+
 def test_runner_passes_windowed_sage_configuration() -> None:
     runner = _runner(
         pairs=[_pair(0), _pair(1), _pair(2)],
@@ -91,14 +112,14 @@ def test_quality_evaluation_time_is_not_policy_overhead() -> None:
     assert summary.mean_policy_overhead_ms < 25.0
 
 
-def test_runner_uses_one_framework_llm_response_for_every_policy(
+def test_runner_calls_framework_llm_on_every_cache_miss(
     tmp_path: Path,
     capsys,
 ) -> None:
     backend = GeneratedLLM()
     pair = _pair(0).model_copy(update={"source_model": "source-model"})
     config = ExperimentConfig(
-        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=2),
         policy=PolicyConfig(
             policies=["LRU", "SAGE"],
             cache_sizes=[0, 1],
@@ -126,8 +147,12 @@ def test_runner_uses_one_framework_llm_response_for_every_policy(
     raw = pd.read_csv(output / "raw" / "lru_cache_0.csv.gz")
     sage_raw = pd.read_csv(output / "raw" / "sage_cache_1.csv.gz")
 
-    assert backend.calls == 1
+    # Both no-cache runs call the backend twice for the repeated exact prompt;
+    # each capacity-one run calls it once and serves the repetition from cache.
+    assert backend.calls == 6
     assert len(summary) == 4
+    assert len(raw) == 2
+    assert not raw["hit"].any()
     assert raw.loc[0, "backend_latency_ms"] == 25.0
     assert raw.loc[0, "response_cosine_distance"] == 0.0
     assert raw.loc[0, "source_model"] == "source-model"
@@ -137,6 +162,40 @@ def test_runner_uses_one_framework_llm_response_for_every_policy(
     captured = capsys.readouterr().out
     assert "LRU cache=0 (no_cache)" in captured
     assert "completed in 00:00:" in captured
+
+
+def test_runner_executes_only_the_selected_array_grid_entry(tmp_path: Path) -> None:
+    backend = GeneratedLLM()
+    pair = _pair(0)
+    config = ExperimentConfig(
+        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+        policy=PolicyConfig(
+            policies=["LRU", "SAGE"],
+            cache_sizes=[0],
+            include_unbounded_cache=False,
+        ),
+        resources=ResourceConfig(enabled=False),
+        output=OutputConfig(
+            directory=tmp_path,
+            run_name="selected-grid-entry",
+            write_raw_results=False,
+            generate_plots=False,
+        ),
+    )
+    runner = ExperimentRunner(
+        config,
+        [pair],
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+        llm=backend,
+        quality_provider=FixedQualityProvider(),
+    )
+
+    output = runner.run(run_index=1)
+    summary = pd.read_csv(output / "summary.csv")
+
+    assert backend.calls == 1
+    assert list(summary["policy"]) == ["SAGE"]
 
 
 def test_failed_run_keeps_partial_raw_output(tmp_path: Path) -> None:
