@@ -32,6 +32,7 @@ class TraceMode(StrEnum):
 
 class LLMProvider(StrEnum):
     OLLAMA = "ollama"
+    RECORDED = "recorded"
 
 
 class BaseDatasetConfig(BaseModel):
@@ -114,9 +115,10 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: LLMProvider = LLMProvider.OLLAMA
-    model: str = Field(default="qwen3:8b", min_length=1)
+    model: str = Field(default="qwen3:4b-instruct", min_length=1)
     host: str = Field(default="http://127.0.0.1:11434", min_length=1)
     options: dict[str, Any] = Field(default_factory=lambda: {"num_predict": 256})
+    recorded_path: Path | None = None
 
 
 class PolicyConfig(BaseModel):
@@ -143,6 +145,7 @@ class PolicyConfig(BaseModel):
     sage_decay_half_life_requests: float | None = Field(default=512, gt=0.0)
     sage_admission_margin: float = Field(default=0.0, ge=0.0)
     sage_current_request_weight: float = Field(default=0.1, ge=0.0, le=1.0)
+    sage_frequency_weight: float = Field(default=0.0, ge=0.0)
     sage_window_fraction: float = Field(default=0.05, ge=0.0, le=1.0)
     sage_soft_coverage: bool = True
     sage_soft_coverage_power: float = Field(default=1.0, gt=0.0)

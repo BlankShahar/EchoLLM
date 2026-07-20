@@ -4,17 +4,23 @@ This branch adds **W-SAGE -- Windowed Semantic Admission and Gain-based
 Eviction** to EchoLLM, plus reproducible OASST1 and WildChat-1M experiment
 pipelines.
 
-W-SAGE combines four mechanisms:
+W-SAGE combines five mechanisms:
 
-- a small LRU probation window that immediately admits new misses;
+- a configurable LRU probation window that immediately admits new misses;
 - a main cache selected by marginal, non-redundant semantic coverage;
 - configurable soft coverage that prefers closer representatives while leaving
   the cache-hit predicate unchanged;
-- separate recent and downsampled long-term demand evidence.
+- separate recent and downsampled long-term demand evidence;
+- an optional direct-frequency regularizer for near-equivalent coverage choices.
 
 When replacement deltas tie, W-SAGE evicts the resident with the lowest
 fractional semantic responsibility before using LRU as the final deterministic
 tie-break.
+
+The frequency regularizer uses the same resident set and capacity. It does not
+maintain a shadow LFU cache: it only protects directly reused residents when
+their normalized popularity outweighs a very small marginal-coverage
+difference.
 
 ## Install
 
@@ -79,11 +85,12 @@ python -m _experiments.run \
   --config _experiments/configs/wildchat_15k.yaml
 ```
 
-Every trace request is sent through `EchoLLM`. A cache miss always calls Ollama,
-even when the exact prompt appeared earlier in the trace; only a cache hit skips
-the backend. The `LLMResponse.latency` from that live call is recorded for the
-request. Response embeddings used only for quality evaluation may be reused and
-do not affect cache behavior or the measured backend/cache latency.
+Every trace request is sent through `EchoLLM`. The default Slurm workflow first
+calls Ollama once per unique prompt and records its response together with the
+real `LLMResponse.latency`. Policy tasks then call that recorded `ILLM` on every
+cache miss, so cache behavior is unchanged while all policies see identical,
+deterministic backend output and latency. Response-quality embeddings are
+outside the measured backend/cache latency.
 
 ## Run on Slurm
 
@@ -101,20 +108,42 @@ MAX_CONCURRENT=8 bash _experiments/slurm/submit_oasst1_array.sh
 MAX_CONCURRENT=8 bash _experiments/slurm/submit_wildchat_15k_array.sh
 ```
 
-Each dataset is a 50-task job array: one full trace replay for each of five
-policies and ten capacities, including unbounded. `MAX_CONCURRENT` limits the
-number of GPUs used simultaneously per dataset. A dependent CPU job validates
-all tasks, combines their results, and generates the final plots. Override the
-backend model if needed:
+Each dataset is a 22-task job array: four bounded capacities times five policies,
+plus one shared no-cache run and one shared unbounded run. `MAX_CONCURRENT`
+limits simultaneous replay tasks. One GPU preparation job materializes the exact
+trace, records backend responses, and computes embeddings once. The policy grid
+then runs as CPU-only replay jobs; a dependent CPU job validates all tasks,
+expands the two policy-independent endpoints onto every curve, combines the
+results, and generates the final plots.
+
+The bounded capacities stop at 500 (3.4--3.6% of each trace); larger caches
+converge toward the separately reported unbounded endpoint too quickly to be a
+useful replacement-policy test. Both traces default to `qwen3:4b-instruct` with
+at most 64 generated tokens.
+Preview the runtime projection without submitting:
 
 ```bash
-MODEL=llama3.2:1b MAX_CONCURRENT=16 \
+DRY_RUN=1 MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_wildchat_15k_array.sh
+```
+
+The projection covers execution after Slurm allocates the one preparation GPU
+and the replay CPUs; queue delay cannot be guaranteed by the scripts.
+
+Override the backend model if needed:
+
+```bash
+MODEL=qwen3:4b-instruct MAX_CONCURRENT=8 \
   bash _experiments/slurm/submit_oasst1_array.sh
 ```
 
-Every task has an isolated worktree, cache, Ollama port, log directory, and
-result directory. Ollama's repetitive `[GIN]` lines are filtered. Task logs use
-`%A_%a`, for example `echollm-wsage-oasst1-12345_7.out`.
+Every task has an isolated policy instance, worktree, log directory, and result
+directory. The prepared trace, recorded backend, and embedding database are
+immutable shared inputs; no cache-policy state is shared between tasks.
+Ollama's repetitive `[GIN]` lines are filtered. Replay logs use `%A_%a`, for
+example `echollm-cache-replay-12345_7.out`.
+The submission helper prints exact `squeue`, `sacct`, `tail`, `scancel`, and
+result-directory commands containing the assigned job IDs.
 
 ## Results
 

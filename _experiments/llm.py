@@ -3,11 +3,16 @@ from collections.abc import Iterator, Mapping
 from llm import ILLM, LLMResponse, LLMResponseChunk, Ollama
 
 from .config import LLMConfig, LLMProvider
+from .recorded_llm import RecordedLLM
 
 
 def build_llm(config: LLMConfig) -> ILLM:
     if config.provider == LLMProvider.OLLAMA:
         return Ollama(model=config.model, host=config.host, options=config.options)
+    if config.provider == LLMProvider.RECORDED:
+        if config.recorded_path is None:
+            raise ValueError("llm.recorded_path is required for the recorded provider")
+        return RecordedLLM(config.recorded_path)
     raise ValueError(f"Unsupported LLM provider: {config.provider}")
 
 

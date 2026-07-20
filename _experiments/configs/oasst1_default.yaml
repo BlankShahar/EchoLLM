@@ -26,33 +26,37 @@ trace:
 
 llm:
   provider: ollama
-  model: qwen3:8b
+  model: qwen3:4b-instruct
   host: http://127.0.0.1:11434
   options:
-    num_predict: 256
+    num_predict: 64
     temperature: 0.0
     seed: 7
 
 policy:
   policies: [LRU, LFU, FIFO, RR, SAGE]
-  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+  # Keep bounded caches at <=3.6% of the trace; larger values approach the
+  # unbounded endpoint too quickly for a 14,241-request trace.
+  cache_sizes: [0, 50, 100, 250, 500]
   include_unbounded_cache: true
-  hit_distance_threshold: 0.25
+  # Freeze one threshold for every policy; recalibrate only per dataset/embedder.
+  hit_distance_threshold: 0.275
   sage_ghost_capacity: null
-  sage_decay_half_life_requests: 512
+  sage_decay_half_life_requests: null
   sage_admission_margin: 0.0
-  sage_current_request_weight: 0.1
+  sage_current_request_weight: 1.0
+  sage_frequency_weight: 5.0
   sage_window_fraction: 0.05
-  sage_soft_coverage: true
+  sage_soft_coverage: false
   sage_soft_coverage_power: 1.0
   sage_recent_history_multiplier: 4.0
   sage_recent_history_limit: 4096
-  sage_long_history_capacity: null
+  sage_long_history_capacity: 8192
   sage_long_history_multiplier: 8.0
   sage_long_history_limit: 8192
-  sage_long_sample_stride: 8
-  sage_recent_evidence_weight: 0.7
-  sage_long_decay_half_life_requests: 32768
+  sage_long_sample_stride: 1
+  sage_recent_evidence_weight: 0.25
+  sage_long_decay_half_life_requests: null
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]

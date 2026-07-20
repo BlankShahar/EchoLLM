@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from .plotting import generate_plots
 
@@ -39,6 +40,7 @@ def aggregate_results(
         repeated = combined.loc[duplicates, identity_columns].to_dict("records")
         raise RuntimeError(f"Duplicate experiment grid entries: {repeated}")
 
+    combined = _expand_policy_independent_capacities(combined, config_path)
     combined = combined.sort_values(["cache_size", "policy"]).reset_index(drop=True)
     output_directory.mkdir(parents=True, exist_ok=True)
     combined.to_csv(output_directory / "summary.csv", index=False)
@@ -66,6 +68,50 @@ def aggregate_results(
     )
     generate_plots(output_directory)
     return output_directory
+
+
+def _expand_policy_independent_capacities(
+    combined: pd.DataFrame,
+    config_path: Path | None,
+) -> pd.DataFrame:
+    """Restore shared no-cache/unbounded measurements to every policy curve."""
+    if config_path is None or "capacity_mode" not in combined:
+        return combined
+    shared = combined.loc[
+        combined["capacity_mode"].isin({"no_cache", "unbounded"})
+    ]
+    if shared.empty:
+        return combined
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    policies = payload.get("policy", {}).get("policies", [])
+    if not isinstance(policies, list):
+        return combined
+
+    existing = {
+        (
+            str(row["policy"]),
+            str(row["capacity_mode"]),
+            int(row["cache_size"]),
+        )
+        for _, row in shared.iterrows()
+    }
+    copies = []
+    for _, source in shared.iterrows():
+        for policy in policies:
+            identity = (
+                policy,
+                str(source["capacity_mode"]),
+                int(source["cache_size"]),
+            )
+            if identity in existing:
+                continue
+            copy = source.copy()
+            copy["policy"] = policy
+            copies.append(copy)
+    if not copies:
+        return combined
+    return pd.concat([combined, pd.DataFrame(copies)], ignore_index=True)
 
 
 def _merge_raw_results(task_directories: list[Path], destination: Path) -> None:

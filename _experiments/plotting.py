@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -106,7 +110,6 @@ def _line_plot(dataframe: pd.DataFrame, metric: str, ylabel: str, output: Path) 
     figure.savefig(output, dpi=200)
     plt.close(figure)
     return output
-
 
 def _pareto_plot(dataframe: pd.DataFrame, output: Path) -> Path:
     figure = plt.figure(figsize=(8, 5))

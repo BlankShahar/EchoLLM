@@ -38,6 +38,7 @@ class SAGESimilarityCache(ICache):
         decay_half_life_requests: float | None = None,
         admission_margin: float = 0.0,
         current_request_weight: float = 0.1,
+        frequency_weight: float = 0.0,
         window_fraction: float = 0.05,
         soft_coverage: bool = True,
         soft_coverage_power: float = 1.0,
@@ -61,6 +62,7 @@ class SAGESimilarityCache(ICache):
             decay_half_life_requests=decay_half_life_requests,
             admission_margin=admission_margin,
             current_request_weight=current_request_weight,
+            frequency_weight=frequency_weight,
             window_fraction=window_fraction,
             soft_coverage=soft_coverage,
             soft_coverage_power=soft_coverage_power,
@@ -99,6 +101,8 @@ class SAGESimilarityCache(ICache):
         self._responses: list[str | None] = [None] * config.max_size
         self._inserted_steps = np.zeros(config.max_size, dtype=np.int64)
         self._last_access_steps = np.zeros(config.max_size, dtype=np.int64)
+        self._observation_ids = np.full(config.max_size, -1, dtype=np.int64)
+        self._frequencies = np.zeros(config.max_size, dtype=np.int64)
         self._step = 0
         self._stats = SAGEStats()
         self._last_decision: SAGEDecision | None = None
@@ -136,6 +140,7 @@ class SAGESimilarityCache(ICache):
                 if response is None:
                     raise RuntimeError(f"Active resident slot {slot} has no response")
                 self._last_access_steps[slot] = self._step
+                self._frequencies[slot] += 1
                 self._stats.hits += 1
                 if self._window_mask[slot]:
                     self._stats.window_hits += 1
@@ -223,7 +228,13 @@ class SAGESimilarityCache(ICache):
                         incoming_key, request, response, vector, context.observation_id
                     )
                 else:
-                    self._admit_through_window(incoming_key, request, response, vector)
+                    self._admit_through_window(
+                        incoming_key,
+                        request,
+                        response,
+                        vector,
+                        context.observation_id,
+                    )
         finally:
             self._stats.admission_time_ms += (perf_counter_ns() - started) / 1_000_000.0
 
@@ -277,6 +288,8 @@ class SAGESimilarityCache(ICache):
             self._responses = [None] * self.config.max_size
             self._inserted_steps[:] = 0
             self._last_access_steps[:] = 0
+            self._observation_ids[:] = -1
+            self._frequencies[:] = 0
             self._recent = GhostWindow(self.config.recent_capacity, self.config.max_size)
             self._long = GhostWindow(self.config.long_capacity, self.config.max_size)
             self._ghost = self._recent
@@ -289,7 +302,13 @@ class SAGESimilarityCache(ICache):
                 self._storage_initialized = False
 
     def close(self) -> None:
-        self._storage.close()
+        with self._lock:
+            active_slots = np.flatnonzero(self._active)
+            if active_slots.size and not isinstance(self._storage, NullSAGEStorage):
+                self._storage.apply(
+                    [self._resident_model(int(slot)) for slot in active_slots]
+                )
+            self._storage.close()
 
     def _admit_direct(
         self,
@@ -312,6 +331,7 @@ class SAGESimilarityCache(ICache):
         new_gain, losses, deltas = self._score_candidate(
             vector, current_observation_id=observation_id
         )
+        deltas = self._frequency_adjusted_deltas(deltas, candidate_frequency=1)
         victim = self._choose_victim(deltas)
         best_delta = float(deltas[victim])
         victim_key = self._keys[victim]
@@ -348,11 +368,15 @@ class SAGESimilarityCache(ICache):
         prompt: str,
         response: str,
         vector: np.ndarray,
+        observation_id: int,
     ) -> None:
         free_window = np.flatnonzero(self._window_mask & ~self._active)
         if free_window.size:
             slot = int(free_window[0])
-            self._commit_batch([(slot, incoming_key, prompt, response, vector)])
+            self._commit_batch(
+                [(slot, incoming_key, prompt, response, vector)],
+                observation_ids={slot: observation_id},
+            )
             self._stats.admissions += 1
             self._stats.window_insertions += 1
             self._last_decision = SAGEDecision(
@@ -373,12 +397,16 @@ class SAGESimilarityCache(ICache):
         outgoing_response = self._responses[outgoing_slot]
         assert self._resident_vectors is not None
         outgoing_vector = self._resident_vectors[outgoing_slot].copy()
+        outgoing_observation_id = int(self._observation_ids[outgoing_slot])
+        outgoing_frequency = int(self._frequencies[outgoing_slot])
         if outgoing_key is None or outgoing_prompt is None or outgoing_response is None:
             raise RuntimeError("Probation window resident is incomplete")
 
         incoming_update = (outgoing_slot, incoming_key, prompt, response, vector)
         if self.config.main_size == 0:
-            self._commit_batch([incoming_update])
+            self._commit_batch(
+                [incoming_update], observation_ids={outgoing_slot: observation_id}
+            )
             self._stats.admissions += 1
             self._stats.window_insertions += 1
             self._stats.rejections += 1
@@ -401,7 +429,12 @@ class SAGESimilarityCache(ICache):
                 [
                     (main_slot, outgoing_key, outgoing_prompt, outgoing_response, outgoing_vector),
                     incoming_update,
-                ]
+                ],
+                observation_ids={
+                    main_slot: -1,
+                    outgoing_slot: observation_id,
+                },
+                frequencies={main_slot: outgoing_frequency},
             )
             self._stats.admissions += 1
             self._stats.window_insertions += 1
@@ -422,7 +455,9 @@ class SAGESimilarityCache(ICache):
             self._resident_vectors[main_slots], outgoing_vector
         )
         if bool((main_distances <= self.config.hit_distance_threshold).any()):
-            self._commit_batch([incoming_update])
+            self._commit_batch(
+                [incoming_update], observation_ids={outgoing_slot: observation_id}
+            )
             self._stats.admissions += 1
             self._stats.window_insertions += 1
             self._stats.rejections += 1
@@ -438,12 +473,22 @@ class SAGESimilarityCache(ICache):
             )
             return
 
-        new_gain, losses, deltas = self._score_candidate(outgoing_vector)
+        new_gain, losses, deltas = self._score_candidate(
+            outgoing_vector,
+            current_observation_id=(
+                outgoing_observation_id if outgoing_observation_id >= 0 else None
+            ),
+        )
+        deltas = self._frequency_adjusted_deltas(
+            deltas, candidate_frequency=outgoing_frequency
+        )
         victim = self._choose_victim(deltas)
         best_delta = float(deltas[victim])
         victim_key = self._keys[victim]
         if best_delta <= self.config.admission_margin + 1e-12:
-            self._commit_batch([incoming_update])
+            self._commit_batch(
+                [incoming_update], observation_ids={outgoing_slot: observation_id}
+            )
             self._stats.admissions += 1
             self._stats.window_insertions += 1
             self._stats.rejections += 1
@@ -468,7 +513,9 @@ class SAGESimilarityCache(ICache):
             [
                 (victim, outgoing_key, outgoing_prompt, outgoing_response, outgoing_vector),
                 incoming_update,
-            ]
+            ],
+            observation_ids={victim: -1, outgoing_slot: observation_id},
+            frequencies={victim: outgoing_frequency},
         )
         self._stats.admissions += 1
         self._stats.window_insertions += 1
@@ -558,6 +605,23 @@ class SAGESimilarityCache(ICache):
         accesses = self._last_access_steps[tied]
         least_recent = tied[accesses == accesses.min()]
         return int(least_recent.min())
+
+    def _frequency_adjusted_deltas(
+        self,
+        deltas: np.ndarray,
+        *,
+        candidate_frequency: int,
+    ) -> np.ndarray:
+        if self.config.frequency_weight == 0.0:
+            return deltas
+        resident_active = self._active & self._main_mask
+        adjusted = deltas.copy()
+        adjusted[resident_active] += (
+            self.config.frequency_weight
+            * (candidate_frequency - self._frequencies[resident_active])
+            / max(1, self._step)
+        )
+        return adjusted
 
     def _fractional_responsibilities(self, slots: np.ndarray) -> np.ndarray:
         parts: list[tuple[float, np.ndarray]] = []
@@ -656,6 +720,9 @@ class SAGESimilarityCache(ICache):
     def _commit_batch(
         self,
         updates: list[tuple[int, str, str, str, np.ndarray]],
+        *,
+        observation_ids: dict[int, int] | None = None,
+        frequencies: dict[int, int] | None = None,
     ) -> None:
         slots = [update[0] for update in updates]
         if len(slots) != len(set(slots)):
@@ -672,6 +739,8 @@ class SAGESimilarityCache(ICache):
                 self._responses[slot],
                 int(self._inserted_steps[slot]),
                 int(self._last_access_steps[slot]),
+                int(self._observation_ids[slot]),
+                int(self._frequencies[slot]),
                 self._recent.utility_column(slot),
                 self._long.utility_column(slot),
             )
@@ -686,6 +755,12 @@ class SAGESimilarityCache(ICache):
                 self._responses[slot] = response
                 self._inserted_steps[slot] = self._step
                 self._last_access_steps[slot] = self._step
+                self._observation_ids[slot] = (
+                    observation_ids.get(slot, -1) if observation_ids else -1
+                )
+                self._frequencies[slot] = (
+                    frequencies.get(slot, 1) if frequencies else 1
+                )
                 if self._main_mask[slot]:
                     recent_column = self._utilities_for_vectors(
                         self._recent.active_vectors(), vector
@@ -709,6 +784,8 @@ class SAGESimilarityCache(ICache):
                     response,
                     inserted,
                     last_access,
+                    observation_id,
+                    frequency,
                     recent_column,
                     long_column,
                 ) = old_state[slot]
@@ -719,6 +796,8 @@ class SAGESimilarityCache(ICache):
                 self._responses[slot] = response
                 self._inserted_steps[slot] = inserted
                 self._last_access_steps[slot] = last_access
+                self._observation_ids[slot] = observation_id
+                self._frequencies[slot] = frequency
                 self._recent.replace_resident_column(slot, recent_column)
                 self._long.replace_resident_column(slot, long_column)
             raise
@@ -738,6 +817,7 @@ class SAGESimilarityCache(ICache):
             vector=self._resident_vectors[slot].tolist(),
             inserted_step=int(self._inserted_steps[slot]),
             last_access_step=int(self._last_access_steps[slot]),
+            frequency=int(self._frequencies[slot]),
         )
 
     def _restore_residents(self) -> None:
@@ -767,6 +847,7 @@ class SAGESimilarityCache(ICache):
             self._responses[slot] = resident.response
             self._inserted_steps[slot] = resident.inserted_step
             self._last_access_steps[slot] = resident.last_access_step
+            self._frequencies[slot] = resident.frequency
             self._step = max(self._step, resident.inserted_step, resident.last_access_step)
 
     def _ensure_storage_metadata(self, dimension: int) -> None:
@@ -780,6 +861,7 @@ class SAGESimilarityCache(ICache):
                 window_size=self.config.window_size,
                 soft_coverage=self.config.soft_coverage,
                 soft_coverage_power=self.config.soft_coverage_power,
+                frequency_weight=self.config.frequency_weight,
             )
         )
         self._storage_initialized = True

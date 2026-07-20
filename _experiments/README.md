@@ -122,9 +122,9 @@ response. Always report it with hit rate and the hit-only quality metrics.
 
 OASST1 does not contain serving latency. The runner uses EchoLLM's existing
 `ILLM` interface: `Ollama.ask()` measures the real generation call and returns
-an `LLMResponse` containing both text and latency. A small in-memory `ILLM`
-decorator generates every prompt once, then replays the identical response and
-latency to every policy.
+an `LLMResponse` containing both text and latency. Every cache miss makes a real
+backend call; generated responses and backend latencies are not memoized across
+requests, policies, or capacities.
 
 Policy runtime is measured separately. Response-quality embedding distance is
 outside the policy timer: a hit measures lookup only, while a miss measures
@@ -157,10 +157,10 @@ embedding:
 
 llm:
   provider: ollama
-  model: qwen3:8b
+  model: qwen3:4b-instruct
   host: http://127.0.0.1:11434
   options:
-    num_predict: 256
+    num_predict: 64   # WildChat-15K; OASST1 remains 256
     temperature: 0.0
     seed: 7
 
@@ -169,24 +169,25 @@ trace:
   request_count: null
 
 policy:
-  cache_sizes: [0, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 20000]
+  cache_sizes: [0, 50, 100, 250, 500]
   include_unbounded_cache: true
   hit_distance_threshold: 0.25
-  sage_window_fraction: 0.05
-  sage_soft_coverage: true
+  sage_window_fraction: 0.50
+  sage_soft_coverage: false
   sage_soft_coverage_power: 1.0
   sage_ghost_capacity: null
-  sage_recent_history_multiplier: 4.0
+  sage_recent_history_multiplier: 2.0
   sage_recent_history_limit: 4096
-  sage_decay_half_life_requests: 512
+  sage_decay_half_life_requests: null
   sage_long_history_capacity: null
-  sage_long_history_multiplier: 8.0
+  sage_long_history_multiplier: 4.0
   sage_long_history_limit: 8192
-  sage_long_sample_stride: 8
-  sage_recent_evidence_weight: 0.7
-  sage_long_decay_half_life_requests: 32768
+  sage_long_sample_stride: 4
+  sage_recent_evidence_weight: 0.75
+  sage_long_decay_half_life_requests: null
   sage_admission_margin: 0.0
-  sage_current_request_weight: 0.1
+  sage_current_request_weight: 1.0
+  sage_frequency_weight: 5.0
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]
@@ -194,11 +195,15 @@ quality:
 
 The numerical thresholds are experiment parameters, not universal constants. Tune the prompt hit threshold on a validation split and freeze it before test comparison. Likewise, define answer-quality thresholds from a held-out sample or human-judged calibration set.
 
-The default W-SAGE reserves 5% of entries for an LRU probation window and uses
-soft semantic coverage. A null explicit history capacity makes the recent and
-long evidence horizons scale with main-cache capacity up to their configured
-limits. The short horizon adapts quickly; downsampled observations retained by
-the long horizon preserve recurring semantic demand.
+The WildChat run is the predeclared **W-SAGE-HR** variant: binary coverage makes
+its admission objective match the primary hit-rate metric, 50% of entries form
+an LRU probation window for the trace's short bursts, and 75% of evidence weight
+goes to the recent bounded horizon. The current request has the same weight as
+any other observation; its
+normalized contribution is still only one request out of the evidence horizon,
+and zero-delta admissions remain rejected. The library default remains soft
+coverage, and the quality-aware variant can be evaluated separately by enabling
+it.
 
 ## Run
 
@@ -226,22 +231,48 @@ Submit both arrays concurrently with:
 MAX_CONCURRENT=8 bash _experiments/slurm/submit_both_arrays.sh
 ```
 
-Each dataset submits 50 independent GPU tasks, one per policy/capacity pair.
-`MAX_CONCURRENT` is the per-dataset concurrency ceiling, so submitting both with
-the default can use up to 16 GPUs. Slurm schedules fewer when resources are not
-available. Each array has a dependent CPU aggregation job that runs only after
-all 50 tasks succeed. Override the defaults when needed, for example:
+Each dataset submits 22 replay tasks: four bounded capacities times five
+policies, plus one shared no-cache run and one shared unbounded run.
+`MAX_CONCURRENT` is the per-dataset concurrency ceiling. Each array has a
+dependent CPU aggregation job that runs only after all tasks succeed.
+Aggregation expands the two policy-independent endpoints onto all five curves.
+
+The preparation job uses `qwen3:4b-instruct` and `num_predict: 64`, records one
+real response per unique prompt, materializes the extracted trace, and computes
+the prompt/reference/generated-response embeddings once. Three waves of CPU-only
+replay tasks then reuse those immutable artifacts. Every replay constructs a
+fresh policy instance, so FAISS/SQLite/cache-policy state cannot leak between
+policies. The projection covers execution after resource allocation, not Slurm
+queue delay. Run only the preflight with:
 
 ```bash
-MODEL=llama3.2:1b MAX_CONCURRENT=16 \
+DRY_RUN=1 MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_wildchat_15k_array.sh
+```
+
+After benchmarking the same model on the cluster, override the projection rate
+when needed:
+
+```bash
+ESTIMATED_PROMPTS_PER_SECOND=2.1 MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_wildchat_15k_array.sh
+```
+
+Override other defaults when needed, for example:
+
+```bash
+MODEL=qwen3:4b-instruct MAX_CONCURRENT=8 \
   bash _experiments/slurm/submit_oasst1_array.sh
 ```
 
-Every task log contains one 14K/15K request progress bar and its duration. Logs
-are named with the array and task IDs (`%A_%a`). Ollama startup and CUDA
-diagnostics remain under that task's `logs` directory, while repetitive `[GIN]`
-records are filtered. Completed raw CSV files are atomically published; failed
-tasks prevent aggregation and retain `.partial` output for diagnosis.
+The preparation log contains the backend-recording and embedding progress bars;
+each replay task log contains one trace-request progress bar and its duration.
+Replay logs are named `echollm-cache-replay-%A_%a.out`. Ollama startup and CUDA
+diagnostics remain under the preparation job's `logs` directory, while
+repetitive `[GIN]` records are filtered. Completed raw CSV files are atomically
+published; failed tasks prevent aggregation and retain `.partial` output.
+The submission helper prints exact monitoring, accounting, log-tail,
+cancellation, and results commands with the assigned job IDs.
 
 ## Raw output schema
 

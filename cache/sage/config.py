@@ -18,6 +18,7 @@ class SAGEConfig(BaseModel):
     decay_half_life_requests: float | None = Field(default=None, gt=0.0)
     admission_margin: float = Field(default=0.0, ge=0.0)
     current_request_weight: float = Field(default=0.1, ge=0.0, le=1.0)
+    frequency_weight: float = Field(default=0.0, ge=0.0)
     window_fraction: float = Field(default=0.05, ge=0.0, le=1.0)
     soft_coverage: bool = True
     soft_coverage_power: float = Field(default=1.0, gt=0.0)

@@ -61,14 +61,7 @@ class SentenceTransformerEmbeddingProvider:
         self.config = config
         self.model_name = model_name
         self._cache = SQLiteEmbeddingCache(config.cache_path)
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as error:
-            raise RuntimeError(
-                "The `sentence-transformers` package is required. "
-                "Install requirements-experiments.txt."
-            ) from error
-        self._model = SentenceTransformer(model_name, device=config.device)
+        self._model = None
 
     def embed_many(self, texts: Sequence[str]) -> np.ndarray:
         results: list[np.ndarray | None] = [None] * len(texts)
@@ -83,7 +76,7 @@ class SentenceTransformerEmbeddingProvider:
                 results[index] = cached
 
         if missing_texts:
-            vectors = self._model.encode(
+            vectors = self._load_model().encode(
                 missing_texts,
                 batch_size=self.config.batch_size,
                 convert_to_numpy=True,
@@ -98,6 +91,19 @@ class SentenceTransformerEmbeddingProvider:
         if any(vector is None for vector in results):
             raise RuntimeError("Embedding generation did not produce every requested vector")
         return np.vstack(results).astype(np.float32)  # type: ignore[arg-type]
+
+    def _load_model(self):
+        if self._model is not None:
+            return self._model
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as error:
+            raise RuntimeError(
+                "The `sentence-transformers` package is required. "
+                "Install requirements-experiments.txt."
+            ) from error
+        self._model = SentenceTransformer(self.model_name, device=self.config.device)
+        return self._model
 
     def __call__(self, text: str) -> list[float]:
         return self.embed_many([text])[0].tolist()

@@ -128,6 +128,7 @@ def test_sqlite_persistence_round_trip(tmp_path: Path) -> None:
     )
     _miss(cache, "a", "answer-a")
     _miss(cache, "b", "answer-b")
+    assert cache.lookup("a").hit
     cache.close()
 
     restored = SAGESimilarityCache(
@@ -141,6 +142,7 @@ def test_sqlite_persistence_round_trip(tmp_path: Path) -> None:
     lookup = restored.lookup("a")
     assert lookup.hit
     assert lookup.response == "answer-a"
+    assert max(restored._frequencies) == 3
     assert restored.lookup("b").hit
     restored.close()
 
@@ -168,6 +170,26 @@ def test_victim_selection_uses_the_exact_best_delta() -> None:
     cache._last_access_steps[:] = [0, 10]
 
     assert cache._choose_victim(np.asarray([1.0, 1.000005])) == 1
+
+
+def test_frequency_regularizer_protects_directly_reused_residents() -> None:
+    cache = SAGESimilarityCache(
+        max_size=2,
+        hit_distance_threshold=0.05,
+        prompt_embedder=lambda _: [1.0, 0.0],
+        window_fraction=0.0,
+        frequency_weight=1.0,
+    )
+    cache._active[:] = True
+    cache._frequencies[:] = [10, 1]
+    cache._step = 10
+
+    adjusted = cache._frequency_adjusted_deltas(
+        np.zeros(2, dtype=np.float64),
+        candidate_frequency=1,
+    )
+
+    assert cache._choose_victim(adjusted) == 1
 
 
 def test_wsage_probation_window_catches_immediate_reuse() -> None:
@@ -220,6 +242,44 @@ def test_wsage_moves_window_lru_to_free_main_slot() -> None:
     assert b.hit and b.metadata["segment"] == "window"
     assert cache.current_size == 2
     assert cache.stats().promotions == 1
+
+
+def test_wsage_discounts_the_probation_candidates_original_miss() -> None:
+    prompts = ["a", "b", "c", "d"]
+    cache = SAGESimilarityCache(
+        max_size=3,
+        hit_distance_threshold=0.05,
+        prompt_embedder=MappingEmbedder(
+            {
+                prompt: [1.0 if index == dimension else 0.0 for dimension in range(4)]
+                for index, prompt in enumerate(prompts)
+            }
+        ),
+        window_fraction=0.34,
+        ghost_capacity=16,
+        long_history_capacity=16,
+        current_request_weight=0.1,
+    )
+    for prompt in prompts[:3]:
+        _miss(cache, prompt, f"answer-{prompt}")
+
+    captured_observation_ids: list[int | None] = []
+    original_score_candidate = cache._score_candidate
+
+    def capture_score(
+        vector: np.ndarray,
+        *,
+        current_observation_id: int | None = None,
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        captured_observation_ids.append(current_observation_id)
+        return original_score_candidate(
+            vector, current_observation_id=current_observation_id
+        )
+
+    cache._score_candidate = capture_score  # type: ignore[method-assign]
+    _miss(cache, "d", "answer-d")
+
+    assert captured_observation_ids == [2]
 
 
 def test_fractional_responsibility_breaks_delta_tie_before_lru() -> None:

@@ -245,5 +245,7 @@ def test_default_experiment_uses_one_path_per_conversation_tree() -> None:
     assert config.dataset.response_selection == ResponseSelection.SINGLE_PATH
     assert config.trace.request_count is None
     assert config.policy.sage_window_fraction == 0.05
-    assert config.policy.sage_soft_coverage is True
+    # The policy default remains soft coverage, while the hit-rate experiment
+    # explicitly selects binary coverage after the trace replay ablation.
+    assert config.policy.sage_soft_coverage is False
     assert config.policy.sage_ghost_capacity is None

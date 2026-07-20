@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 from time import perf_counter
 
-from .config import ExperimentConfig
+from .config import ExperimentConfig, LLMProvider
 from .runner import ExperimentRunner, format_duration
 
 
@@ -12,9 +12,18 @@ def main() -> None:
     parser.add_argument("--output-dir", help="Override output.directory")
     parser.add_argument("--run-name", help="Override output.run_name")
     parser.add_argument("--embedding-cache-path", help="Override embedding.cache_path")
+    parser.add_argument(
+        "--prepared-pairs-path",
+        type=Path,
+        help="Load a dataset extraction materialized by the preparation job",
+    )
     parser.add_argument("--device", help="Override embedding.device, for example cuda or cpu")
     parser.add_argument("--model", help="Override llm.model")
     parser.add_argument("--ollama-host", help="Override llm.host")
+    parser.add_argument(
+        "--recorded-llm-path",
+        help="Replay a pre-recorded backend database instead of calling Ollama",
+    )
     parser.add_argument(
         "--run-index",
         type=int,
@@ -46,6 +55,13 @@ def main() -> None:
             llm_updates["model"] = arguments.model
         if arguments.ollama_host:
             llm_updates["host"] = arguments.ollama_host
+        if arguments.recorded_llm_path:
+            llm_updates.update(
+                {
+                    "provider": LLMProvider.RECORDED,
+                    "recorded_path": Path(arguments.recorded_llm_path),
+                }
+            )
         if llm_updates:
             config_updates["llm"] = config.llm.model_copy(update=llm_updates)
         if arguments.output_dir:
@@ -58,7 +74,10 @@ def main() -> None:
             config_updates["output"] = config.output.model_copy(update=output_updates)
         if config_updates:
             config = config.model_copy(update=config_updates)
-        output = ExperimentRunner.from_config(config).run(run_index=arguments.run_index)
+        output = ExperimentRunner.from_config(
+            config,
+            prepared_pairs_path=arguments.prepared_pairs_path,
+        ).run(run_index=arguments.run_index)
         status = "completed"
         print(output)
     finally:

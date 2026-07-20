@@ -28,6 +28,8 @@ from .llm import ReferenceLLM, build_llm
 from .metrics import MetricsAccumulator, RequestObservation, RunSummary
 from .models import PromptResponsePair, TraceRequest
 from .plotting import generate_plots
+from .prepared import load_prepared_pairs
+from .recorded_llm import RecordedLLM
 from .resources import ResourceTracker, ResourceUsage
 from .trace import build_trace
 
@@ -42,6 +44,7 @@ class ExperimentRunner:
         *,
         llm: ILLM | None = None,
         quality_provider: EmbeddingProvider | None = None,
+        generated_response_vectors: dict[str, np.ndarray] | None = None,
     ) -> None:
         if (
             len(pairs) != prompt_embeddings.shape[0]
@@ -59,6 +62,8 @@ class ExperimentRunner:
             pair.reference_response: self.response_embeddings[index]
             for index, pair in enumerate(pairs)
         }
+        if generated_response_vectors:
+            self._response_vectors.update(generated_response_vectors)
         self._prompt_embedder = PrecomputedEmbedder(self._prompt_vectors)
         backend = llm or ReferenceLLM(
             {pair.prompt: pair.reference_response for pair in pairs}
@@ -68,8 +73,17 @@ class ExperimentRunner:
         self._trace = build_trace(pairs, self.prompt_embeddings, config.trace)
 
     @classmethod
-    def from_config(cls, config: ExperimentConfig) -> "ExperimentRunner":
-        pairs = load_prompt_response_pairs(config.dataset)
+    def from_config(
+        cls,
+        config: ExperimentConfig,
+        *,
+        prepared_pairs_path: Path | None = None,
+    ) -> "ExperimentRunner":
+        pairs = (
+            load_prepared_pairs(prepared_pairs_path)
+            if prepared_pairs_path is not None
+            else load_prompt_response_pairs(config.dataset)
+        )
         prompt_provider = SentenceTransformerEmbeddingProvider(
             config.embedding,
             config.embedding.prompt_model_name,
@@ -82,13 +96,34 @@ class ExperimentRunner:
         response_embeddings = quality_provider.embed_many(
             [pair.reference_response for pair in pairs]
         )
+        backend = build_llm(config.llm)
+        generated_response_vectors: dict[str, np.ndarray] = {}
+        if isinstance(backend, RecordedLLM):
+            trace_prompts = {
+                request.prompt
+                for request in build_trace(pairs, prompt_embeddings, config.trace)
+            }
+            generated_responses = list(
+                dict.fromkeys(
+                    item.response
+                    for item in backend.recorded_responses()
+                    if item.prompt in trace_prompts
+                )
+            )
+            if generated_responses:
+                generated_embeddings = quality_provider.embed_many(generated_responses)
+                generated_response_vectors = {
+                    response: generated_embeddings[index]
+                    for index, response in enumerate(generated_responses)
+                }
         return cls(
             config,
             pairs,
             prompt_embeddings,
             response_embeddings,
-            llm=build_llm(config.llm),
+            llm=backend,
             quality_provider=quality_provider,
+            generated_response_vectors=generated_response_vectors,
         )
 
     def run(self, run_index: int | None = None) -> Path:
@@ -159,7 +194,14 @@ class ExperimentRunner:
     def run_grid(self) -> list[tuple[str, int, str, int]]:
         grid: list[tuple[str, int, str, int]] = []
         for cache_size, capacity_mode in self._capacity_runs():
-            for policy_name in self.config.policy.policies:
+            # No-cache and unbounded-cache traces are policy independent, so
+            # replay each only once and expand their plotted rows at aggregation.
+            policies = (
+                self.config.policy.policies[:1]
+                if capacity_mode in {"no_cache", "unbounded"}
+                else self.config.policy.policies
+            )
+            for policy_name in policies:
                 grid.append((policy_name, cache_size, capacity_mode, len(grid)))
         return grid
 
@@ -348,6 +390,7 @@ class ExperimentRunner:
                 decay_half_life_requests=self.config.policy.sage_decay_half_life_requests,
                 admission_margin=self.config.policy.sage_admission_margin,
                 current_request_weight=self.config.policy.sage_current_request_weight,
+                frequency_weight=self.config.policy.sage_frequency_weight,
                 window_fraction=self.config.policy.sage_window_fraction,
                 soft_coverage=self.config.policy.sage_soft_coverage,
                 soft_coverage_power=self.config.policy.sage_soft_coverage_power,

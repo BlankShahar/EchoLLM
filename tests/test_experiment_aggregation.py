@@ -43,6 +43,33 @@ def test_aggregate_rejects_missing_tasks(tmp_path: Path) -> None:
         raise AssertionError("Expected aggregation to reject an incomplete array")
 
 
+def test_aggregate_expands_one_shared_no_cache_row_for_all_policies(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tasks = tmp_path / "tasks"
+    _write_task(tasks / "task-000", "LRU", 0, "no_cache")
+    _write_task(tasks / "task-001", "SAGE", 10, "bounded")
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "policy:\n  policies: [LRU, LFU, FIFO, RR, SAGE]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("_experiments.aggregate.generate_plots", lambda _: [])
+
+    output = aggregate_results(
+        tasks,
+        tmp_path / "combined",
+        expected_tasks=2,
+        config_path=config,
+    )
+
+    summary = pd.read_csv(output / "summary.csv")
+    zero = summary.loc[summary["capacity_mode"] == "no_cache"]
+    assert set(zero["policy"]) == {"LRU", "LFU", "FIFO", "RR", "SAGE"}
+    assert len(list((output / "raw").glob("*cache_0.csv.gz"))) == 1
+
+
 def _write_task(
     directory: Path,
     policy: str,

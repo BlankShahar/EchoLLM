@@ -82,6 +82,7 @@ class PersistedResident(BaseModel):
     vector: list[float]
     inserted_step: int = Field(ge=0)
     last_access_step: int = Field(ge=0)
+    frequency: int = Field(default=1, ge=1)
 
 
 class SAGEStorageMetadata(BaseModel):
@@ -91,3 +92,4 @@ class SAGEStorageMetadata(BaseModel):
     window_size: int = Field(default=0, ge=0)
     soft_coverage: bool = False
     soft_coverage_power: float = Field(default=1.0, gt=0.0)
+    frequency_weight: float = Field(default=0.0, ge=0.0)

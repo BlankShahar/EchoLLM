@@ -90,11 +90,23 @@ class SQLiteSAGEStorage(SAGEStorage):
                     vector_dimension INTEGER NOT NULL,
                     inserted_step INTEGER NOT NULL,
                     last_access_step INTEGER NOT NULL,
+                    frequency INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY(namespace, slot),
                     UNIQUE(namespace, key)
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in self._connection.execute(
+                    "PRAGMA table_info(sage_residents)"
+                )
+            }
+            if "frequency" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE sage_residents "
+                    "ADD COLUMN frequency INTEGER NOT NULL DEFAULT 1"
+                )
 
     def validate_or_initialize(self, metadata: SAGEStorageMetadata) -> None:
         values = {
@@ -104,6 +116,7 @@ class SQLiteSAGEStorage(SAGEStorage):
             "window_size": str(metadata.window_size),
             "soft_coverage": str(metadata.soft_coverage),
             "soft_coverage_power": repr(metadata.soft_coverage_power),
+            "frequency_weight": repr(metadata.frequency_weight),
         }
         with self._lock, self._connection:
             existing_rows = self._connection.execute(
@@ -127,7 +140,7 @@ class SQLiteSAGEStorage(SAGEStorage):
             rows = self._connection.execute(
                 """
                 SELECT slot, key, prompt, response, vector, vector_dimension,
-                       inserted_step, last_access_step
+                       inserted_step, last_access_step, frequency
                 FROM sage_residents
                 WHERE namespace = ?
                 ORDER BY slot
@@ -136,7 +149,17 @@ class SQLiteSAGEStorage(SAGEStorage):
             ).fetchall()
         residents: list[PersistedResident] = []
         for row in rows:
-            slot, key, prompt, response, blob, dimension, inserted, last_access = row
+            (
+                slot,
+                key,
+                prompt,
+                response,
+                blob,
+                dimension,
+                inserted,
+                last_access,
+                frequency,
+            ) = row
             vector = np.frombuffer(blob, dtype=np.float32, count=dimension).copy().tolist()
             residents.append(
                 PersistedResident(
@@ -147,6 +170,7 @@ class SQLiteSAGEStorage(SAGEStorage):
                     vector=vector,
                     inserted_step=inserted,
                     last_access_step=last_access,
+                    frequency=frequency,
                 )
             )
         return residents
@@ -171,7 +195,8 @@ class SQLiteSAGEStorage(SAGEStorage):
                     INSERT INTO sage_residents(
                         namespace, slot, key, prompt, response, vector,
                         vector_dimension, inserted_step, last_access_step
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        , frequency
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         self._namespace,
@@ -183,6 +208,7 @@ class SQLiteSAGEStorage(SAGEStorage):
                         vector.shape[0],
                         resident.inserted_step,
                         resident.last_access_step,
+                        resident.frequency,
                     ),
                 )
 

@@ -49,11 +49,9 @@ def test_run_grid_has_stable_capacity_then_policy_order() -> None:
 
     assert runner.run_grid() == [
         ("LRU", 0, "no_cache", 0),
-        ("SAGE", 0, "no_cache", 1),
-        ("LRU", 1, "bounded", 2),
-        ("SAGE", 1, "bounded", 3),
-        ("LRU", 2, "unbounded", 4),
-        ("SAGE", 2, "unbounded", 5),
+        ("LRU", 1, "bounded", 1),
+        ("SAGE", 1, "bounded", 2),
+        ("LRU", 2, "unbounded", 3),
     ]
 
 
@@ -147,10 +145,10 @@ def test_runner_calls_framework_llm_on_every_cache_miss(
     raw = pd.read_csv(output / "raw" / "lru_cache_0.csv.gz")
     sage_raw = pd.read_csv(output / "raw" / "sage_cache_1.csv.gz")
 
-    # Both no-cache runs call the backend twice for the repeated exact prompt;
-    # each capacity-one run calls it once and serves the repetition from cache.
-    assert backend.calls == 6
-    assert len(summary) == 4
+    # No-cache is policy-independent and runs once; each capacity-one policy
+    # calls the backend once and serves the repetition from cache.
+    assert backend.calls == 4
+    assert len(summary) == 3
     assert len(raw) == 2
     assert not raw["hit"].any()
     assert raw.loc[0, "backend_latency_ms"] == 25.0
@@ -171,7 +169,7 @@ def test_runner_executes_only_the_selected_array_grid_entry(tmp_path: Path) -> N
         trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
         policy=PolicyConfig(
             policies=["LRU", "SAGE"],
-            cache_sizes=[0],
+            cache_sizes=[0, 1],
             include_unbounded_cache=False,
         ),
         resources=ResourceConfig(enabled=False),
@@ -195,7 +193,7 @@ def test_runner_executes_only_the_selected_array_grid_entry(tmp_path: Path) -> N
     summary = pd.read_csv(output / "summary.csv")
 
     assert backend.calls == 1
-    assert list(summary["policy"]) == ["SAGE"]
+    assert list(summary["policy"]) == ["LRU"]
 
 
 def test_failed_run_keeps_partial_raw_output(tmp_path: Path) -> None:

@@ -20,6 +20,8 @@ OUTPUT_DIRECTORY="$EXPERIMENT_PATH/results/$RESULT_GROUP"
 TASKS_ROOT="$OUTPUT_DIRECTORY/tasks"
 CONFIG_PATH="$SOURCE_PATH/$EXPERIMENT_CONFIG_RELATIVE"
 
+export MPLBACKEND=Agg
+
 echo "Aggregating $EXPECTED_TASKS tasks from array $EXPERIMENT_ARRAY_JOB_ID..."
 eval "$(/storage/modules/packages/anaconda/bin/conda shell.bash hook)"
 conda activate py313
