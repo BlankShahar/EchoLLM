@@ -43,17 +43,13 @@ if [[ -n "${TRACE_REQUESTS:-}" && -n "${ESTIMATED_PROMPTS_PER_SECOND:-}" ]]; the
   fi
 
   PROJECTED_HOURS=$(awk \
-    -v waves="$GENERATION_WAVES" \
-    -v replay_waves="$WAVES" \
-    -v requests="$TRACE_REQUESTS" \
-    -v qps="$ESTIMATED_PROMPTS_PER_SECOND" \
-    -v setup_minutes="${SETUP_MINUTES_PER_WAVE:-0}" \
-    -v replay_hours="${ARRAY_REPLAY_HOURS_PER_WAVE:-0.75}" \
-    'BEGIN {
-      printf "%.2f",
-        waves * (requests / qps / 3600 + setup_minutes / 60) +
-        replay_waves * replay_hours
-    }')
+  -v waves="$GENERATION_WAVES" \
+  -v replay_waves="$WAVES" \
+  -v requests="$TRACE_REQUESTS" \
+  -v qps="$ESTIMATED_PROMPTS_PER_SECOND" \
+  -v setup_minutes="${SETUP_MINUTES_PER_WAVE:-0}" \
+  -v replay_hours="${ARRAY_REPLAY_HOURS_PER_WAVE:-0.75}" \
+  'BEGIN { printf "%.2f", waves * (requests / qps / 3600 + setup_minutes / 60) + replay_waves * replay_hours }')
 
   echo "Projected worst-case array runtime: ${PROJECTED_HOURS}h " \
     "(${TRACE_REQUESTS} unique backend recordings using ${MODEL:-the configured model} " \
