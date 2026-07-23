@@ -3,6 +3,7 @@
 ARRAY_SCRIPT_RELATIVE="_experiments/slurm/run_wildchat_15k.sbatch"
 EXPERIMENT_CONFIG_RELATIVE="_experiments/configs/wildchat_15k.yaml"
 RUN_PREFIX="wildchat15k-wsage"
+DATASET_LABEL="WildChat first 15K chronological requests"
 EXPECTED_TASKS=22
 TRACE_REQUESTS=13838
 TARGET_HOURS=15

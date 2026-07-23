@@ -3,6 +3,7 @@
 ARRAY_SCRIPT_RELATIVE="_experiments/slurm/run_oasst1.sbatch"
 EXPERIMENT_CONFIG_RELATIVE="_experiments/configs/oasst1_default.yaml"
 RUN_PREFIX="oasst1-wsage"
+DATASET_LABEL="OASST1 single-path trace"
 EXPECTED_TASKS=22
 TRACE_REQUESTS=14142
 TARGET_HOURS=6
