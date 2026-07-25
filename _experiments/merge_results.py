@@ -31,6 +31,8 @@ def validate_incremental_setup(
 ) -> list[int]:
     """Fail before submission when the proposed replay cannot be merged fairly."""
     baseline = _read_summary(baseline_directory)
+    baseline_stats = _read_json(baseline_directory / "dataset_stats.json")
+    baseline = _normalize_effective_unbounded(baseline, baseline_stats)
     _validate_baseline_policies(baseline)
     source_config = ExperimentConfig.from_yaml(source_config_path).select_grid(
         policies=[policy],
@@ -71,7 +73,17 @@ def merge_policy_results(
 
     baseline = _read_summary(baseline_directory)
     incremental = _read_summary(incremental_directory)
+    baseline_stats = _read_json(baseline_directory / "dataset_stats.json")
+    incremental_stats = _read_json(incremental_directory / "dataset_stats.json")
+    if baseline_stats != incremental_stats:
+        raise RuntimeError("Baseline and incremental runs used different dataset traces")
+    baseline = _normalize_effective_unbounded(baseline, baseline_stats)
+    baseline = _expand_policy_independent_endpoints(
+        baseline,
+        _REQUIRED_BASELINE_POLICIES,
+    )
     _validate_baseline_policies(baseline)
+
     incremental_policies = set(incremental["policy"].astype(str))
     if incremental_policies != {policy}:
         raise RuntimeError(
@@ -80,11 +92,6 @@ def merge_policy_results(
         )
     if set(incremental["capacity_mode"].astype(str)) != {"bounded"}:
         raise RuntimeError("Incremental results must contain bounded capacities only")
-
-    baseline_stats = _read_json(baseline_directory / "dataset_stats.json")
-    incremental_stats = _read_json(incremental_directory / "dataset_stats.json")
-    if baseline_stats != incremental_stats:
-        raise RuntimeError("Baseline and incremental runs used different dataset traces")
 
     baseline_config = ExperimentConfig.from_yaml(
         _effective_config_path(baseline_directory)
@@ -112,10 +119,13 @@ def merge_policy_results(
         raise RuntimeError("Raw results contain different request traces")
 
     baseline_without_policy = baseline.loc[baseline["policy"] != policy].copy()
-    endpoints = _policy_independent_endpoints(baseline_without_policy, policy)
     combined = pd.concat(
-        [baseline_without_policy, incremental, endpoints],
+        [baseline_without_policy, incremental],
         ignore_index=True,
+    )
+    combined = _expand_policy_independent_endpoints(
+        combined,
+        _REQUIRED_BASELINE_POLICIES | {policy},
     )
     duplicates = combined.duplicated(_IDENTITY_COLUMNS, keep=False)
     if duplicates.any():
@@ -286,21 +296,53 @@ def _comparison_config(
     }
 
 
-def _policy_independent_endpoints(
-    baseline: pd.DataFrame,
-    policy: str,
+def _normalize_effective_unbounded(
+    frame: pd.DataFrame,
+    dataset_stats: dict[str, Any],
 ) -> pd.DataFrame:
-    endpoints = baseline.loc[
-        baseline["capacity_mode"].isin({"no_cache", "unbounded"})
-    ]
+    unique_prompts = dataset_stats.get("unique_prompt_strings")
+    if not isinstance(unique_prompts, int) or unique_prompts <= 0:
+        return frame
+    normalized = frame.copy()
+    effective_unbounded = (
+        (normalized["cache_size"].astype(int) >= unique_prompts)
+        & (normalized["cache_size"].astype(int) > 0)
+    )
+    normalized.loc[effective_unbounded, "capacity_mode"] = "unbounded"
+    return normalized
+
+
+def _expand_policy_independent_endpoints(
+    frame: pd.DataFrame,
+    policies: set[str],
+) -> pd.DataFrame:
+    endpoints = frame.loc[frame["capacity_mode"].isin({"no_cache", "unbounded"})]
+    existing = {
+        (
+            str(row["policy"]),
+            int(row["cache_size"]),
+            str(row["capacity_mode"]),
+        )
+        for _, row in frame.iterrows()
+    }
     copies: list[pd.Series] = []
     for _, group in endpoints.groupby(["cache_size", "capacity_mode"], sort=False):
-        copy = group.iloc[0].copy()
-        copy["policy"] = policy
-        copies.append(copy)
+        source = group.iloc[0]
+        for policy in sorted(policies):
+            identity = (
+                policy,
+                int(source["cache_size"]),
+                str(source["capacity_mode"]),
+            )
+            if identity in existing:
+                continue
+            copy = source.copy()
+            copy["policy"] = policy
+            copies.append(copy)
+            existing.add(identity)
     if not copies:
-        return baseline.iloc[0:0].copy()
-    return pd.DataFrame(copies)
+        return frame
+    return pd.concat([frame, pd.DataFrame(copies)], ignore_index=True)
 
 
 def _trace_fingerprint(raw_directory: Path) -> str:

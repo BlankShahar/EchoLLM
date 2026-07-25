@@ -47,7 +47,7 @@ def test_merge_adds_sparq_and_policy_independent_endpoints(
     bounded = summary.loc[summary["cache_size"] == 1_000]
     zero = summary.loc[summary["cache_size"] == 0]
     assert set(bounded["policy"]) == set(BASELINE_POLICIES) | {"SPARQ"}
-    assert set(zero["policy"]) == {"LRU", "SPARQ"}
+    assert set(zero["policy"]) == set(BASELINE_POLICIES) | {"SPARQ"}
     assert (merged / "merge_manifest.json").is_file()
     assert (merged / "plots" / "hit_rate_vs_cache_size.png").is_file()
     assert (merged / "plots" / "semantic_accuracy_vs_cache_size.png").is_file()
@@ -125,6 +125,53 @@ def test_preflight_returns_only_baseline_bounded_capacities(
     assert validate_incremental_setup(baseline, source) == [1_000]
 
 
+def test_lru_only_capacity_above_unique_prompts_becomes_shared_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline = tmp_path / "baseline"
+    incremental = tmp_path / "incremental"
+    _write_result_directories(baseline, incremental)
+    baseline_summary = pd.read_csv(baseline / "summary.csv")
+    baseline_summary = pd.concat(
+        [
+            baseline_summary,
+            pd.DataFrame([_summary_row("LRU", 2_000, "bounded")]),
+        ],
+        ignore_index=True,
+    )
+    baseline_summary.to_csv(baseline / "summary.csv", index=False)
+    _write_config(
+        baseline / "experiment_config.yaml",
+        BASELINE_POLICIES,
+        [0, 1_000, 2_000],
+    )
+    stats = {"trace_requests": 2_100, "unique_prompt_strings": 1_500}
+    for directory in (baseline, incremental):
+        (directory / "dataset_stats.json").write_text(
+            json.dumps(stats),
+            encoding="utf-8",
+        )
+    source = tmp_path / "source.yaml"
+    _write_config(
+        source,
+        BASELINE_POLICIES + ["SPARQ"],
+        [0, 1_000, 2_000],
+    )
+    monkeypatch.setattr("_experiments.merge_results.generate_plots", lambda _: [])
+
+    assert validate_incremental_setup(baseline, source) == [1_000]
+    output = merge_policy_results(
+        baseline,
+        incremental,
+        tmp_path / "comparison",
+    )
+    summary = pd.read_csv(output / "summary.csv")
+    endpoint = summary.loc[summary["cache_size"] == 2_000]
+    assert set(endpoint["policy"]) == set(BASELINE_POLICIES) | {"SPARQ"}
+    assert set(endpoint["capacity_mode"]) == {"unbounded"}
+
+
 def _write_result_directories(
     baseline: Path,
     incremental: Path,
@@ -141,7 +188,7 @@ def _write_result_directories(
         [_summary_row("SPARQ", 1_000, "bounded")]
     ).to_csv(incremental / "summary.csv", index=False)
 
-    stats = {"trace_requests": 1, "unique_prompt_strings": 1}
+    stats = {"trace_requests": 1, "unique_prompt_strings": 2_000}
     for directory in (baseline, incremental):
         (directory / "dataset_stats.json").write_text(
             json.dumps(stats),
