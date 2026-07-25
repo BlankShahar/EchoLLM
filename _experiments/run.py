@@ -30,6 +30,16 @@ def main() -> None:
         help="Run only this zero-based policy/capacity grid entry",
     )
     parser.add_argument(
+        "--policies",
+        nargs="+",
+        help="Restrict the grid to these policies, for example --policies SPARQ",
+    )
+    parser.add_argument(
+        "--positive-cache-sizes-only",
+        action="store_true",
+        help="Exclude capacity zero and the synthetic unbounded endpoint",
+    )
+    parser.add_argument(
         "--skip-plots",
         action="store_true",
         help="Do not generate plots (used by array tasks before aggregation)",
@@ -39,6 +49,10 @@ def main() -> None:
     status = "failed"
     try:
         config = ExperimentConfig.from_yaml(arguments.config)
+        config = config.select_grid(
+            policies=arguments.policies,
+            positive_cache_sizes_only=arguments.positive_cache_sizes_only,
+        )
         embedding_updates = {}
         llm_updates = {}
         output_updates = {}

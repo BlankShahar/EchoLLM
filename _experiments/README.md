@@ -2,7 +2,9 @@
 
 ## Research question
 
-Does SAGE improve semantic cache hit rate and latency over basic replacement policies without obtaining those gains by returning unsuitable cached answers?
+Do SAGE or SPARQ improve semantic cache hit rate and latency over basic
+replacement policies without obtaining those gains by returning unsuitable
+cached answers?
 
 ## Dataset extraction
 
@@ -56,13 +58,13 @@ memoized by the experiment layer.
 The capacity sweep accepts zero. `include_unbounded_cache: true` adds a final
 capacity equal to the number of unique prompt strings in the actual trace, which
 is sufficient to avoid capacity eviction. Every policy/capacity run constructs
-a fresh cache. The experiment baselines and SAGE are in-memory and do not use
+a fresh cache. The experiment baselines, SAGE, and SPARQ are in-memory and do not use
 EchoLLM's FAISS or response SQLite databases; the shared SQLite embedding cache
 contains only model/text embeddings and is intentionally reused.
 
 ## Fair baselines
 
-LRU, LFU, FIFO, random replacement, and SAGE all use:
+LRU, LFU, FIFO, random replacement, SAGE, and SPARQ all use:
 
 - exact resident-vector scans;
 - the same prompt embeddings;
@@ -140,7 +142,7 @@ lookup plus admission.
 - `runner_cpu_time_seconds`: process CPU time during the measured trace.
 
 GPU utilization is not a replacement-policy metric: Ollama generation and
-embedding computation use the GPU, while exact cache lookup and SAGE scoring
+embedding computation use the GPU, while exact cache lookup and policy scoring
 are NumPy/CPU operations.
 
 ## Configuration
@@ -160,7 +162,7 @@ llm:
   model: qwen3:4b-instruct
   host: http://127.0.0.1:11434
   options:
-    num_predict: 64   # WildChat-15K; OASST1 remains 256
+    num_predict: 64   # both default trace configurations
     temperature: 0.0
     seed: 7
 
@@ -169,8 +171,10 @@ trace:
   request_count: null
 
 policy:
-  cache_sizes: [0, 50, 100, 250, 500]
-  include_unbounded_cache: true
+  policies: [LRU, LFU, FIFO, RR, SAGE, SPARQ]
+  cache_sizes: [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000,
+                8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000]
+  include_unbounded_cache: false
   hit_distance_threshold: 0.25
   sage_window_fraction: 0.50
   sage_soft_coverage: false
@@ -188,6 +192,12 @@ policy:
   sage_admission_margin: 0.0
   sage_current_request_weight: 1.0
   sage_frequency_weight: 5.0
+  sparq_window_fraction: 0.50
+  sparq_credit_power: 2.0
+  sparq_aging_interval_requests: null
+  sparq_aging_factor: 0.5
+  sparq_admission_margin: 0.0
+  sparq_initial_score: 1.0
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]
@@ -231,11 +241,41 @@ Submit both arrays concurrently with:
 MAX_CONCURRENT=8 bash _experiments/slurm/submit_both_arrays.sh
 ```
 
-Each dataset submits 22 replay tasks: four bounded capacities times five
-policies, plus one shared no-cache run and one shared unbounded run.
-`MAX_CONCURRENT` is the per-dataset concurrency ceiling. Each array has a
-dependent CPU aggregation job that runs only after all tasks succeed.
-Aggregation expands the two policy-independent endpoints onto all five curves.
+Each current dataset configuration submits 91 replay tasks: one shared no-cache
+run, then 15 positive capacities for six policies. `MAX_CONCURRENT` is the
+per-dataset concurrency ceiling. Each array has a dependent CPU aggregation job
+that runs only after all tasks succeed.
+
+### Incremental SPARQ-only replay
+
+When the LRU/LFU/FIFO/RR/SAGE arrays are already complete, run only SPARQ and
+merge it into those results:
+
+```bash
+export OASST_BASELINE_RESULTS="$HOME/_experiments/echollm-sage/results/oasst1-wsage-19530834"
+export WILDCHAT_BASELINE_RESULTS="$HOME/_experiments/echollm-sage/results/wildchat15k-wsage-19530847"
+
+MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_both_sparq_only.sh
+```
+
+This creates two 15-task CPU arrays, one per trace. No Ollama process is started
+and no other policy is replayed. The submission script discovers and reuses the
+recorded backend, prepared pairs, and embedding cache from each baseline.
+
+After each array succeeds, `aggregate_incremental_policy.sbatch`:
+
+1. Aggregates the SPARQ-only raw and summary results.
+2. Confirms the five baseline policies and all bounded capacities are present.
+3. Confirms the dataset, trace, embedder, backend model/options, hit threshold,
+   quality settings, recorded response database, and embedding cache agree.
+4. Hashes raw request identities to verify exact trace equality.
+5. Adds policy-independent zero/unbounded endpoints for SPARQ when present.
+6. Writes a combined summary and regenerates every all-policy plot.
+
+The baseline and SPARQ raw files remain in their original directories rather
+than being duplicated. Their locations and the verified trace fingerprint are
+recorded in `comparison/merge_manifest.json`.
 
 The preparation job uses `qwen3:4b-instruct` and `num_predict: 64`, records one
 real response per unique prompt, materializes the extracted trace, and computes
@@ -288,14 +328,15 @@ Each compressed raw CSV includes:
 - backend latency returned by `ILLM.ask()`;
 - measured policy overhead;
 - total end-to-end latency;
-- SAGE admission decision, net delta, incoming-window admission, and promotion
-  outcome where applicable.
+- SAGE/SPARQ admission decision, comparison delta, incoming-window admission,
+  and promotion outcome where applicable;
+- SPARQ candidate and victim scores.
 
 ## Suggested paper-quality protocol
 
 1. Choose train/validation/test partitions without leaking identical message trees across splits.
 2. Calibrate semantic-hit and answer-quality thresholds only on validation data.
 3. Report hit rate, semantic accuracy, quality-adjusted hit rate, mean/p95/p99 latency, throughput, overhead, and peak RSS together.
-4. Sweep cache capacity and ghost capacity.
-5. Include SAGE ablations when making claims about which SAGE component caused an improvement.
+4. Sweep cache capacity and the policy-specific history/window parameters.
+5. Include SAGE and SPARQ ablations when attributing an improvement to a policy component.
 6. Inspect a stratified sample of good and bad hits manually or with a separate judged benchmark.

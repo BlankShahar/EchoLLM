@@ -1,8 +1,18 @@
-# EchoLLM W-SAGE
+# EchoLLM semantic cache policies
 
-This branch adds **W-SAGE -- Windowed Semantic Admission and Gain-based
-Eviction** to EchoLLM, plus reproducible OASST1 and WildChat-1M experiment
-pipelines.
+This branch adds two semantic admission and eviction policies to EchoLLM:
+
+- **W-SAGE**, which optimizes counterfactual marginal semantic coverage.
+- **SPARQ**, a compact semantic-frequency policy with aging and an LRU
+  probation queue.
+
+It also includes reproducible OASST1 and WildChat-1M experiment pipelines.
+
+SPARQ assigns proximity-weighted credit to cached prompts that cover each
+request. Close representatives receive more credit, overlapping representatives
+split the same demand, and stale scores are periodically aged. New misses first
+enter a small LRU probation queue; a probation resident enters the main cache
+only when its score beats the weakest main-cache resident.
 
 W-SAGE combines five mechanisms:
 
@@ -60,6 +70,29 @@ configured semantic-distance threshold used by every baseline.
 Set `soft_coverage=False` for binary SAGE coverage. Set `window_fraction=0` for
 the direct-admission SAGE ablation.
 
+## Use SPARQ with EchoLLM
+
+```python
+from cache.sparq import SPARQSimilarityCache
+from echollm import EchoLLM
+
+cache = SPARQSimilarityCache(
+    max_size=1_000,
+    hit_distance_threshold=0.25,
+    prompt_embedder=my_embedding_function,
+    window_fraction=0.20,
+    credit_power=2.0,
+    aging_factor=0.5,
+)
+
+echo = EchoLLM(cache=cache, llm=my_llm)
+answer = echo.ask("How can I reset my password?")
+```
+
+The default aging interval is four times the cache capacity. Set
+`aging_interval_requests` explicitly to override it. Setting
+`window_fraction=0` produces the direct semantic-frequency ablation.
+
 ## Dataset construction
 
 The default OASST1 loader combines train and validation, keeps every language,
@@ -108,18 +141,52 @@ MAX_CONCURRENT=8 bash _experiments/slurm/submit_oasst1_array.sh
 MAX_CONCURRENT=8 bash _experiments/slurm/submit_wildchat_15k_array.sh
 ```
 
-Each dataset is a 22-task job array: four bounded capacities times five policies,
-plus one shared no-cache run and one shared unbounded run. `MAX_CONCURRENT`
-limits simultaneous replay tasks. One GPU preparation job materializes the exact
-trace, records backend responses, and computes embeddings once. The policy grid
-then runs as CPU-only replay jobs; a dependent CPU job validates all tasks,
-expands the two policy-independent endpoints onto every curve, combines the
-results, and generates the final plots.
+Each current dataset configuration is a 91-task array: one shared no-cache run,
+then 15 positive capacities for six policies. `MAX_CONCURRENT` limits
+simultaneous replay tasks. One GPU preparation job materializes the exact trace,
+records backend responses, and computes embeddings once. The policy grid then
+runs as CPU-only replay jobs; a dependent CPU job validates all tasks, combines
+the results, and generates the final plots.
 
-The bounded capacities stop at 500 (3.4--3.6% of each trace); larger caches
-converge toward the separately reported unbounded endpoint too quickly to be a
-useful replacement-policy test. Both traces default to `qwen3:4b-instruct` with
-at most 64 generated tokens.
+The full sweep runs from 1,000 entries through 15,000 entries. Its upper points
+are intentionally near effective-unbounded behavior and should be interpreted as
+convergence checks rather than as capacity-pressure comparisons. Both traces
+default to `qwen3:4b-instruct` with at most 64 generated tokens.
+
+### Add SPARQ to completed benchmark results
+
+Do not rerun the five existing policies or Ollama. Point the incremental
+workflow at the two completed aggregate directories:
+
+```bash
+export OASST_BASELINE_RESULTS="$HOME/_experiments/echollm-sage/results/oasst1-wsage-19530834"
+export WILDCHAT_BASELINE_RESULTS="$HOME/_experiments/echollm-sage/results/wildchat15k-wsage-19530847"
+
+MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_both_sparq_only.sh
+```
+
+Each trace submits 15 CPU replay tasks: SPARQ at capacities 1,000 through
+15,000. The script reuses the baseline's recorded LLM database, prepared trace,
+and embedding cache. A dependent merge job validates the configurations,
+capacity grid, dataset statistics, and raw request-trace fingerprint before
+regenerating all-policy plots.
+
+The submission output prints both job IDs and exact paths. Final merged results
+are written below:
+
+```text
+$HOME/_experiments/echollm-sage/results/<trace>-sparq-incremental-<array-job-id>/comparison/
+├── summary.csv
+├── summary.json
+├── merge_manifest.json
+└── plots/
+```
+
+If automatic artifact discovery cannot find an older prepared trace, explicitly
+set `RECORDED_LLM_PATH`, `PREPARED_PAIRS_PATH`, and
+`EMBEDDING_CACHE_PATH` to the artifacts used by that baseline.
+
 Preview the runtime projection without submitting:
 
 ```bash
@@ -166,9 +233,9 @@ after a policy run completes.
 
 The summaries include hit rate, semantic accuracy, quality-adjusted hit rate,
 good-hit precision, bad-hit rate, mean/p95/p99 latency, policy overhead,
-throughput, CPU time, and process RSS context. Raw SAGE rows also expose whether
-the incoming miss entered probation and whether the resident leaving probation
-was promoted to the main cache.
+throughput, CPU time, and process RSS context. Raw SAGE and SPARQ rows also
+expose admission/promotion outcomes. SPARQ rows include the candidate and victim
+scores used by the replacement decision.
 
 ## Validation
 

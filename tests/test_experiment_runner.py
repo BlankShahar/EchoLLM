@@ -87,6 +87,34 @@ def test_runner_passes_windowed_sage_configuration() -> None:
     assert cache.config.long_decay_half_life_requests == 100.0
 
 
+def test_runner_passes_sparq_configuration() -> None:
+    runner = _runner(
+        pairs=[_pair(0), _pair(1), _pair(2)],
+        trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=None),
+        policy=PolicyConfig(
+            policies=["SPARQ"],
+            cache_sizes=[3],
+            include_unbounded_cache=False,
+            sparq_window_fraction=0.34,
+            sparq_credit_power=3.0,
+            sparq_aging_interval_requests=17,
+            sparq_aging_factor=0.25,
+            sparq_admission_margin=0.1,
+            sparq_initial_score=2.0,
+        ),
+    )
+
+    cache = runner._build_cache("SPARQ", 3)
+
+    assert cache is not None
+    assert cache.config.window_size == 1
+    assert cache.config.credit_power == 3.0
+    assert cache.config.effective_aging_interval == 17
+    assert cache.config.aging_factor == 0.25
+    assert cache.config.admission_margin == 0.1
+    assert cache.config.initial_score == 2.0
+
+
 def test_quality_evaluation_time_is_not_policy_overhead() -> None:
     runner = _runner(
         pairs=[_pair(0)],
@@ -119,7 +147,7 @@ def test_runner_calls_framework_llm_on_every_cache_miss(
     config = ExperimentConfig(
         trace=TraceConfig(mode=TraceMode.CHRONOLOGICAL, request_count=2),
         policy=PolicyConfig(
-            policies=["LRU", "SAGE"],
+            policies=["LRU", "SAGE", "SPARQ"],
             cache_sizes=[0, 1],
             include_unbounded_cache=False,
         ),
@@ -144,11 +172,12 @@ def test_runner_calls_framework_llm_on_every_cache_miss(
     summary = pd.read_csv(output / "summary.csv")
     raw = pd.read_csv(output / "raw" / "lru_cache_0.csv.gz")
     sage_raw = pd.read_csv(output / "raw" / "sage_cache_1.csv.gz")
+    sparq_raw = pd.read_csv(output / "raw" / "sparq_cache_1.csv.gz")
 
     # No-cache is policy-independent and runs once; each capacity-one policy
     # calls the backend once and serves the repetition from cache.
-    assert backend.calls == 4
-    assert len(summary) == 3
+    assert backend.calls == 5
+    assert len(summary) == 4
     assert len(raw) == 2
     assert not raw["hit"].any()
     assert raw.loc[0, "backend_latency_ms"] == 25.0
@@ -156,6 +185,8 @@ def test_runner_calls_framework_llm_on_every_cache_miss(
     assert raw.loc[0, "source_model"] == "source-model"
     assert bool(sage_raw.loc[0, "incoming_admitted"])
     assert "promoted" in sage_raw.columns
+    assert bool(sparq_raw.loc[0, "incoming_admitted"])
+    assert sparq_raw.loc[0, "candidate_score"] == 1.0
     assert not list((output / "raw").glob("*.partial"))
     captured = capsys.readouterr().out
     assert "LRU cache=0 (no_cache)" in captured

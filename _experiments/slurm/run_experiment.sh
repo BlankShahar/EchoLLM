@@ -226,6 +226,13 @@ PREPARED_ARGS=()
 if [[ -n "$PREPARED_PAIRS_PATH" ]]; then
   PREPARED_ARGS=(--prepared-pairs-path "$PREPARED_PAIRS_PATH")
 fi
+GRID_ARGS=()
+if [[ -n "${POLICY_FILTER:-}" ]]; then
+  GRID_ARGS+=(--policies "$POLICY_FILTER")
+fi
+if [[ "${POSITIVE_CACHE_SIZES_ONLY:-0}" == "1" ]]; then
+  GRID_ARGS+=(--positive-cache-sizes-only)
+fi
 srun python -m _experiments.run \
   --config "$CONFIG_PATH" \
   "${LLM_ARGS[@]}" \
@@ -234,6 +241,7 @@ srun python -m _experiments.run \
   "${PREPARED_ARGS[@]}" \
   --output-dir "$RESULTS_OUTPUT_ROOT" \
   --run-name "$RUN_NAME" \
+  "${GRID_ARGS[@]}" \
   "${RUN_SELECTION_ARGS[@]}"
 
 echo "Experiment completed successfully."

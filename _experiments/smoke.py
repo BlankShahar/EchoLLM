@@ -8,6 +8,7 @@ from .config import (
     OutputConfig,
     PolicyConfig,
     QualityConfig,
+    ResourceConfig,
     TraceConfig,
     TraceMode,
 )
@@ -76,7 +77,7 @@ def main() -> None:
             seed=11,
         ),
         policy=PolicyConfig(
-            policies=["LRU", "LFU", "FIFO", "RR", "SAGE"],
+            policies=["LRU", "LFU", "FIFO", "RR", "SAGE", "SPARQ"],
             cache_sizes=[3, 5, 8],
             include_unbounded_cache=False,
             hit_distance_threshold=0.08,
@@ -84,6 +85,7 @@ def main() -> None:
             sage_decay_half_life_requests=96,
         ),
         quality=QualityConfig(good_hit_distance_thresholds=[0.05, 0.1, 0.2]),
+        resources=ResourceConfig(enabled=False),
         output=OutputConfig(
             directory=Path("results"),
             run_name="smoke",

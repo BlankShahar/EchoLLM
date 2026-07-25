@@ -33,9 +33,8 @@ llm:
     seed: 7
 
 policy:
-  policies: [LRU, LFU, FIFO, RR, SAGE]
-  # Keep bounded caches at <=3.4% of the trace; larger values approach the
-  # unbounded endpoint too quickly for a 15,000-request trace.
+  policies: [LRU, LFU, FIFO, RR, SAGE, SPARQ]
+  # Sweep the bounded regime through the practically unbounded endpoint.
   cache_sizes: [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000]
   include_unbounded_cache: false
   # Freeze one threshold for every policy; recalibrate only per dataset/embedder.
@@ -58,6 +57,12 @@ policy:
   sage_long_sample_stride: 4
   sage_recent_evidence_weight: 0.75
   sage_long_decay_half_life_requests: null
+  sparq_window_fraction: 0.50
+  sparq_credit_power: 2.0
+  sparq_aging_interval_requests: null
+  sparq_aging_factor: 0.5
+  sparq_admission_margin: 0.0
+  sparq_initial_score: 1.0
 
 quality:
   good_hit_distance_thresholds: [0.1, 0.2, 0.3]
@@ -68,6 +73,6 @@ resources:
 
 output:
   directory: results
-  run_name: wildchat_15k_wsage_hr
+  run_name: wildchat_15k_cache_policy_comparison
   write_raw_results: true
   generate_plots: true

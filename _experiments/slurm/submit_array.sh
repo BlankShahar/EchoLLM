@@ -246,6 +246,6 @@ fi
 echo "Monitor: squeue -j $MONITOR_IDS"
 echo "Accounting: sacct -j $ARRAY_JOB_ID --format=JobID,State,Elapsed,Start,End"
 echo "First task log: tail -f $SOURCE_PATH/$ARRAY_LOG_PREFIX-${ARRAY_JOB_ID}_0.out"
-echo "Aggregate log: tail -f $SOURCE_PATH/echollm-wsage-aggregate-$AGGREGATE_JOB_ID.out"
+echo "Aggregate log: tail -f $SOURCE_PATH/echollm-cache-aggregate-$AGGREGATE_JOB_ID.out"
 echo "Cancel all: scancel $MONITOR_IDS"
 echo "Results: ${EXPERIMENT_PATH:-$HOME/_experiments/echollm-sage}/results/$RUN_PREFIX-$ARRAY_JOB_ID"

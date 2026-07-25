@@ -124,7 +124,9 @@ class LLMConfig(BaseModel):
 class PolicyConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    policies: list[str] = Field(default_factory=lambda: ["LRU", "LFU", "FIFO", "RR", "SAGE"])
+    policies: list[str] = Field(
+        default_factory=lambda: ["LRU", "LFU", "FIFO", "RR", "SAGE", "SPARQ"]
+    )
     cache_sizes: list[int] = Field(
         default_factory=lambda: [
             0,
@@ -157,10 +159,16 @@ class PolicyConfig(BaseModel):
     sage_long_sample_stride: int = Field(default=8, gt=0)
     sage_recent_evidence_weight: float = Field(default=0.7, ge=0.0, le=1.0)
     sage_long_decay_half_life_requests: float | None = Field(default=32768, gt=0.0)
+    sparq_window_fraction: float = Field(default=0.2, ge=0.0, le=1.0)
+    sparq_credit_power: float = Field(default=2.0, gt=0.0)
+    sparq_aging_interval_requests: int | None = Field(default=None, gt=0)
+    sparq_aging_factor: float = Field(default=0.5, gt=0.0, le=1.0)
+    sparq_admission_margin: float = Field(default=0.0, ge=0.0)
+    sparq_initial_score: float = Field(default=1.0, gt=0.0)
 
     @model_validator(mode="after")
     def validate_policy_values(self) -> "PolicyConfig":
-        valid = {"LRU", "LFU", "FIFO", "RR", "SAGE"}
+        valid = {"LRU", "LFU", "FIFO", "RR", "SAGE", "SPARQ"}
         unknown = set(self.policies) - valid
         if unknown:
             raise ValueError(f"Unsupported policies: {sorted(unknown)}")
@@ -208,3 +216,30 @@ class ExperimentConfig(BaseModel):
         with Path(path).open("r", encoding="utf-8") as handle:
             payload = yaml.safe_load(handle)
         return cls.model_validate(payload)
+
+    def select_grid(
+        self,
+        *,
+        policies: list[str] | None = None,
+        positive_cache_sizes_only: bool = False,
+    ) -> "ExperimentConfig":
+        """Return a validated configuration for an incremental grid replay."""
+        selected_policies = policies or self.policy.policies
+        selected_sizes = [
+            size
+            for size in self.policy.cache_sizes
+            if not positive_cache_sizes_only or size > 0
+        ]
+        policy = self.policy.model_copy(
+            update={
+                "policies": selected_policies,
+                "cache_sizes": selected_sizes,
+                "include_unbounded_cache": (
+                    False
+                    if positive_cache_sizes_only
+                    else self.policy.include_unbounded_cache
+                ),
+            }
+        )
+        validated_policy = PolicyConfig.model_validate(policy.model_dump())
+        return self.model_copy(update={"policy": validated_policy})

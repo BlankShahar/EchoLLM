@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from cache import ICache
 from cache.sage import SAGESimilarityCache
+from cache.sparq import SPARQSimilarityCache
 from cache.similarity_cache import RankingDistanceMethod
 from echollm import EchoLLM
 from llm import ILLM
@@ -287,25 +288,14 @@ class ExperimentRunner:
                         "admission_net_delta": "",
                         "incoming_admitted": "",
                         "promoted": "",
+                        "candidate_score": "",
+                        "victim_score": "",
                     }
                     response_distance = self._response_distance(
                         result.response, request.reference_response
                     )
                     if not result.cache_hit:
-                        if (
-                            isinstance(cache, SAGESimilarityCache)
-                            and cache.last_decision is not None
-                        ):
-                            decision_payload = {
-                                "candidate_admitted": cache.last_decision.admitted,
-                                "admission_net_delta": cache.last_decision.net_delta,
-                                "incoming_admitted": _optional_value(
-                                    cache.last_decision.incoming_admitted
-                                ),
-                                "promoted": _optional_value(
-                                    cache.last_decision.promoted
-                                ),
-                            }
+                        decision_payload = _decision_payload(cache)
 
                     total_latency_ms = policy_overhead_ms + result.llm_latency
                     observation = RequestObservation(
@@ -411,6 +401,19 @@ class ExperimentRunner:
                     self.config.policy.sage_long_decay_half_life_requests
                 ),
             )
+        if policy_name == "SPARQ":
+            return SPARQSimilarityCache(
+                **common,
+                ranking_distance_method=RankingDistanceMethod.COSINE,
+                window_fraction=self.config.policy.sparq_window_fraction,
+                credit_power=self.config.policy.sparq_credit_power,
+                aging_interval_requests=(
+                    self.config.policy.sparq_aging_interval_requests
+                ),
+                aging_factor=self.config.policy.sparq_aging_factor,
+                admission_margin=self.config.policy.sparq_admission_margin,
+                initial_score=self.config.policy.sparq_initial_score,
+            )
         return ExactSemanticBaselineCache(
             BaselineKind(policy_name),
             **common,
@@ -473,6 +476,8 @@ _RAW_FIELDS = [
     "admission_net_delta",
     "incoming_admitted",
     "promoted",
+    "candidate_score",
+    "victim_score",
 ]
 
 
@@ -482,6 +487,44 @@ def _format_optional(value: float | None) -> str:
 
 def _optional_value(value: object | None) -> object:
     return "" if value is None else value
+
+
+def _decision_payload(cache: ICache | None) -> dict[str, object]:
+    empty = {
+        "candidate_admitted": "",
+        "admission_net_delta": "",
+        "incoming_admitted": "",
+        "promoted": "",
+        "candidate_score": "",
+        "victim_score": "",
+    }
+    if cache is None:
+        return empty
+    decision = getattr(cache, "last_decision", None)
+    if decision is None:
+        return empty
+
+    candidate_score = getattr(decision, "candidate_score", None)
+    victim_score = getattr(decision, "victim_score", None)
+    net_delta = getattr(decision, "net_delta", None)
+    if (
+        net_delta is None
+        and candidate_score is not None
+        and victim_score is not None
+    ):
+        net_delta = candidate_score - victim_score
+    return {
+        "candidate_admitted": _optional_value(
+            getattr(decision, "admitted", None)
+        ),
+        "admission_net_delta": _optional_value(net_delta),
+        "incoming_admitted": _optional_value(
+            getattr(decision, "incoming_admitted", None)
+        ),
+        "promoted": _optional_value(getattr(decision, "promoted", None)),
+        "candidate_score": _optional_value(candidate_score),
+        "victim_score": _optional_value(victim_score),
+    }
 
 
 def format_duration(seconds: float) -> str:

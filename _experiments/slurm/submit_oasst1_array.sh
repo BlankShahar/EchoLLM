@@ -3,11 +3,11 @@
 ARRAY_SCRIPT_RELATIVE="_experiments/slurm/run_oasst1.sbatch"
 EXPERIMENT_CONFIG_RELATIVE="_experiments/configs/oasst1_default.yaml"
 
-RUN_PREFIX="oasst1-wsage"
+RUN_PREFIX="oasst1-sparq"
 DATASET_LABEL="OASST1 single-path trace"
 
-# 0 once + 15 positive capacities * 5 policies = 76 tasks.
-EXPECTED_TASKS=72
+# 0 once + 15 positive capacities * 6 policies = 91 tasks.
+EXPECTED_TASKS=91
 
 TRACE_REQUESTS=14142
 TARGET_HOURS=6
@@ -16,7 +16,7 @@ ESTIMATED_PROMPTS_PER_SECOND="${ESTIMATED_PROMPTS_PER_SECOND:-1.8}"
 SETUP_MINUTES_PER_WAVE="${SETUP_MINUTES_PER_WAVE:-8}"
 MAX_ALLOWED_CONCURRENT=8
 
-TASK_LOG_PREFIX="echollm-wsage-oasst1"
+TASK_LOG_PREFIX="echollm-sparq-oasst1"
 
 export MODEL="${MODEL:-qwen3:4b-instruct}"
 

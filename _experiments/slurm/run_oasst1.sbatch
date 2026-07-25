@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --partition=main
 #SBATCH --time=0-04:00:00
-#SBATCH --job-name=echollm-wsage-oasst1
-#SBATCH --output=echollm-wsage-oasst1-%A_%a.out
-#SBATCH --array=0-21%8
+#SBATCH --job-name=echollm-sparq-oasst1
+#SBATCH --output=echollm-sparq-oasst1-%A_%a.out
+#SBATCH --array=0-90%8
 #SBATCH --mem=58G
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus=rtx_6000:1
 
 EXPERIMENT_CONFIG_RELATIVE="_experiments/configs/oasst1_default.yaml"
-RUN_PREFIX="oasst1-wsage"
+RUN_PREFIX="oasst1-sparq"
 DATASET_LABEL="OASST1 single-path trace"
 DEFAULT_MODEL="qwen3:4b-instruct"
 

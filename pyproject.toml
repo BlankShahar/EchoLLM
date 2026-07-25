@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "echollm-sage"
 version = "0.1.0"
-description = "SAGE semantic admission and gain-based eviction for EchoLLM"
+description = "SAGE and SPARQ semantic cache policies for EchoLLM"
 requires-python = ">=3.11"
 dependencies = [
   "adaptive_pipeline~=0.1.0",

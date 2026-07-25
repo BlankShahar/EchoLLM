@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --partition=main
 #SBATCH --time=01:00:00
-#SBATCH --job-name=echollm-wsage-aggregate
-#SBATCH --output=echollm-wsage-aggregate-%j.out
+#SBATCH --job-name=echollm-cache-aggregate
+#SBATCH --output=echollm-cache-aggregate-%j.out
 #SBATCH --mem=8G
 #SBATCH --cpus-per-task=2
 
