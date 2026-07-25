@@ -14,6 +14,7 @@ from .plotting import generate_plots
 
 _IDENTITY_COLUMNS = ["policy", "cache_size", "capacity_mode"]
 _REQUIRED_BASELINE_POLICIES = {"LRU", "LFU", "FIFO", "RR", "SAGE"}
+_ALL_POLICIES = _REQUIRED_BASELINE_POLICIES | {"SPARQ"}
 _TRACE_COLUMNS = [
     "request_index",
     "created_at",
@@ -171,6 +172,159 @@ def merge_policy_results(
     return output_directory
 
 
+def validate_capacity_setup(
+    existing_directory: Path,
+    source_config_path: Path,
+    *,
+    cache_sizes: list[int],
+) -> tuple[list[str], list[int]]:
+    """Validate an all-policy supplemental capacity grid before submission."""
+    selected_sizes = _validated_supplemental_sizes(cache_sizes)
+    existing = _read_summary(existing_directory)
+    existing_stats = _read_json(existing_directory / "dataset_stats.json")
+    existing = _normalize_effective_unbounded(existing, existing_stats)
+    _validate_all_policies(existing)
+
+    overlap = set(selected_sizes) & set(existing["cache_size"].astype(int))
+    if overlap:
+        raise RuntimeError(
+            f"Supplemental capacities already exist: {sorted(overlap)}"
+        )
+
+    source = ExperimentConfig.from_yaml(source_config_path)
+    source_policies = source.policy.policies
+    if set(source_policies) != _ALL_POLICIES:
+        raise RuntimeError(
+            "Source config must contain exactly "
+            f"{sorted(_ALL_POLICIES)}; found {sorted(source_policies)}"
+        )
+    source_config = source.select_grid(
+        policies=source_policies,
+        cache_sizes=selected_sizes,
+        positive_cache_sizes_only=True,
+    )
+    existing_config = ExperimentConfig.from_yaml(
+        _published_config_path(existing_directory)
+    )
+    _assert_compatible_configs(
+        existing_config,
+        source_config,
+        compare_artifact_paths=False,
+    )
+    return source_config.policy.policies, selected_sizes
+
+
+def merge_capacity_results(
+    existing_directory: Path,
+    supplemental_directory: Path,
+    output_directory: Path,
+) -> Path:
+    """Add a new all-policy capacity range to a completed comparison."""
+    existing_directory = existing_directory.resolve()
+    supplemental_directory = supplemental_directory.resolve()
+    output_directory = output_directory.resolve()
+    if output_directory in {existing_directory, supplemental_directory}:
+        raise ValueError("Merged output must be separate from both source directories")
+
+    existing = _read_summary(existing_directory)
+    supplemental = _read_summary(supplemental_directory)
+    existing_stats = _read_json(existing_directory / "dataset_stats.json")
+    supplemental_stats = _read_json(
+        supplemental_directory / "dataset_stats.json"
+    )
+    if existing_stats != supplemental_stats:
+        raise RuntimeError("Existing and supplemental runs used different traces")
+
+    existing = _normalize_effective_unbounded(existing, existing_stats)
+    existing = _expand_policy_independent_endpoints(existing, _ALL_POLICIES)
+    _validate_all_policies(existing)
+
+    supplemental_policies = set(supplemental["policy"].astype(str))
+    if supplemental_policies != _ALL_POLICIES:
+        raise RuntimeError(
+            "Supplemental results must contain exactly "
+            f"{sorted(_ALL_POLICIES)}; found {sorted(supplemental_policies)}"
+        )
+    if set(supplemental["capacity_mode"].astype(str)) != {"bounded"}:
+        raise RuntimeError("Supplemental capacities must all be bounded")
+
+    supplemental_sizes = set(supplemental["cache_size"].astype(int))
+    _assert_policy_capacity_grid(
+        supplemental,
+        policies=_ALL_POLICIES,
+        expected=supplemental_sizes,
+    )
+    overlap = supplemental_sizes & set(existing["cache_size"].astype(int))
+    if overlap:
+        raise RuntimeError(
+            f"Supplemental capacities already exist: {sorted(overlap)}"
+        )
+
+    existing_config = ExperimentConfig.from_yaml(
+        _effective_config_path(existing_directory)
+    )
+    supplemental_config = ExperimentConfig.from_yaml(
+        _effective_config_path(supplemental_directory)
+    )
+    _assert_compatible_configs(
+        existing_config,
+        supplemental_config,
+        compare_artifact_paths=True,
+    )
+
+    existing_raw = _results_raw_directory(existing_directory)
+    supplemental_raw = _results_raw_directory(supplemental_directory)
+    existing_fingerprint = _trace_fingerprint(existing_raw)
+    supplemental_fingerprint = _trace_fingerprint(supplemental_raw)
+    if existing_fingerprint != supplemental_fingerprint:
+        raise RuntimeError("Raw results contain different request traces")
+
+    combined = pd.concat([existing, supplemental], ignore_index=True)
+    combined = _expand_policy_independent_endpoints(combined, _ALL_POLICIES)
+    duplicates = combined.duplicated(_IDENTITY_COLUMNS, keep=False)
+    if duplicates.any():
+        repeated = combined.loc[duplicates, _IDENTITY_COLUMNS].to_dict("records")
+        raise RuntimeError(f"Duplicate merged grid entries: {repeated}")
+    combined = combined.sort_values(["cache_size", "policy"]).reset_index(drop=True)
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(output_directory / "summary.csv", index=False)
+    (output_directory / "summary.json").write_text(
+        json.dumps(combined.to_dict("records"), indent=2),
+        encoding="utf-8",
+    )
+    shutil.copy2(
+        existing_directory / "dataset_stats.json",
+        output_directory / "dataset_stats.json",
+    )
+    shutil.copy2(
+        _published_config_path(existing_directory),
+        output_directory / "existing_config.yaml",
+    )
+    shutil.copy2(
+        _published_config_path(supplemental_directory),
+        output_directory / "supplemental_config.yaml",
+    )
+    manifest = {
+        "kind": "supplemental_capacities",
+        "existing_directory": str(existing_directory),
+        "supplemental_directory": str(supplemental_directory),
+        "summary_rows": len(combined),
+        "supplemental_capacities": sorted(supplemental_sizes),
+        "trace_fingerprint": existing_fingerprint,
+        "raw_results": {
+            "existing": str(existing_raw),
+            "supplemental": str(supplemental_raw),
+        },
+    }
+    (output_directory / "merge_manifest.json").write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
+    generate_plots(output_directory)
+    return output_directory
+
+
 def _read_summary(directory: Path) -> pd.DataFrame:
     summary_path = directory / "summary.csv"
     if not summary_path.is_file():
@@ -193,6 +347,39 @@ def _validate_baseline_policies(baseline: pd.DataFrame) -> None:
         raise RuntimeError(
             f"Baseline results are missing policies: {sorted(missing)}"
         )
+
+
+def _validate_all_policies(frame: pd.DataFrame) -> None:
+    policies = set(frame["policy"].astype(str))
+    if policies != _ALL_POLICIES:
+        raise RuntimeError(
+            "Existing results must contain exactly "
+            f"{sorted(_ALL_POLICIES)}; found {sorted(policies)}"
+        )
+
+
+def _validated_supplemental_sizes(cache_sizes: list[int]) -> list[int]:
+    selected = sorted(set(cache_sizes))
+    if not selected or any(size <= 0 for size in selected):
+        raise ValueError("Supplemental cache sizes must be positive")
+    return selected
+
+
+def _assert_policy_capacity_grid(
+    frame: pd.DataFrame,
+    *,
+    policies: set[str],
+    expected: set[int],
+) -> None:
+    for policy in policies:
+        actual = set(
+            frame.loc[frame["policy"] == policy, "cache_size"].astype(int)
+        )
+        if actual != expected:
+            raise RuntimeError(
+                f"{policy} capacities {sorted(actual)} do not match "
+                f"the supplemental grid {sorted(expected)}"
+            )
 
 
 def _assert_matching_bounded_capacities(
@@ -368,15 +555,40 @@ def _trace_fingerprint(raw_directory: Path) -> str:
 
 
 def _published_config_path(directory: Path) -> Path:
-    path = directory / "experiment_config.yaml"
-    if not path.is_file():
-        raise FileNotFoundError(f"Published experiment config not found: {path}")
-    return path
+    candidates = [
+        directory / "experiment_config.yaml",
+        directory / "incremental_config.yaml",
+        directory / "supplemental_config.yaml",
+        directory / "baseline_config.yaml",
+        directory / "existing_config.yaml",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError(
+        f"Published experiment config not found under {directory}"
+    )
 
 
 def _effective_config_path(directory: Path) -> Path:
     task_configs = sorted((directory / "tasks").glob("task-*/config.json"))
     return task_configs[0] if task_configs else _published_config_path(directory)
+
+
+def _results_raw_directory(directory: Path) -> Path:
+    direct = directory / "raw"
+    if direct.is_dir() and any(direct.glob("*.csv.gz")):
+        return direct
+    manifest_path = directory / "merge_manifest.json"
+    if manifest_path.is_file():
+        raw_results = _read_json(manifest_path).get("raw_results", {})
+        for key in ("supplemental", "incremental", "existing", "baseline"):
+            candidate = raw_results.get(key)
+            if candidate:
+                path = Path(candidate)
+                if path.is_dir() and any(path.glob("*.csv.gz")):
+                    return path
+    raise FileNotFoundError(f"No raw results found for {directory}")
 
 
 def _read_json(path: Path) -> Any:
@@ -402,6 +614,33 @@ def main() -> None:
     merge.add_argument("--output-dir", type=Path, required=True)
     merge.add_argument("--policy", default="SPARQ")
 
+    validate_capacities = subparsers.add_parser("validate-capacities")
+    validate_capacities.add_argument(
+        "--existing-dir",
+        type=Path,
+        required=True,
+    )
+    validate_capacities.add_argument(
+        "--source-config",
+        type=Path,
+        required=True,
+    )
+    validate_capacities.add_argument(
+        "--cache-sizes",
+        nargs="+",
+        type=int,
+        required=True,
+    )
+
+    merge_capacities = subparsers.add_parser("merge-capacities")
+    merge_capacities.add_argument("--existing-dir", type=Path, required=True)
+    merge_capacities.add_argument(
+        "--supplemental-dir",
+        type=Path,
+        required=True,
+    )
+    merge_capacities.add_argument("--output-dir", type=Path, required=True)
+
     arguments = parser.parse_args()
     if arguments.command == "validate":
         capacities = validate_incremental_setup(
@@ -415,12 +654,37 @@ def main() -> None:
             flush=True,
         )
         return
-    output = merge_policy_results(
-        arguments.baseline_dir,
-        arguments.incremental_dir,
-        arguments.output_dir,
-        policy=arguments.policy,
-    )
+    if arguments.command == "validate-capacities":
+        policies, capacities = validate_capacity_setup(
+            arguments.existing_dir,
+            arguments.source_config,
+            cache_sizes=arguments.cache_sizes,
+        )
+        print(
+            "Supplemental capacity experiment is compatible with the existing "
+            "comparison.",
+            flush=True,
+        )
+        print("POLICIES=" + ",".join(policies), flush=True)
+        print(
+            "CACHE_SIZES=" + ",".join(str(size) for size in capacities),
+            flush=True,
+        )
+        print(f"EXPECTED_TASKS={len(policies) * len(capacities)}", flush=True)
+        return
+    if arguments.command == "merge-capacities":
+        output = merge_capacity_results(
+            arguments.existing_dir,
+            arguments.supplemental_dir,
+            arguments.output_dir,
+        )
+    else:
+        output = merge_policy_results(
+            arguments.baseline_dir,
+            arguments.incremental_dir,
+            arguments.output_dir,
+            policy=arguments.policy,
+        )
     print(output, flush=True)
 
 

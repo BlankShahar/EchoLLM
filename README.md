@@ -189,6 +189,45 @@ If automatic artifact discovery cannot find an older prepared trace, explicitly
 set `RECORDED_LLM_PATH`, `PREPARED_PAIRS_PATH`, and
 `EMBEDDING_CACHE_PATH` to the artifacts used by that baseline.
 
+### Add sub-1K capacities to completed all-policy comparisons
+
+The supplemental workflow runs all six policies at capacities
+`50, 100, 250, 500, 750`, then merges those 30 rows into each completed
+all-policy comparison. It reuses the exact recorded backend, prepared request
+trace, and embedding cache; it does not start Ollama or repeat capacities of
+1,000 and above.
+
+Point it at the two `comparison` directories produced by the incremental SPARQ
+workflow:
+
+```bash
+export OASST_EXISTING_RESULTS="$HOME/_experiments/echollm-sage/results/oasst1-sparq-incremental-<OASST_ARRAY_ID>/comparison"
+export WILDCHAT_EXISTING_RESULTS="$HOME/_experiments/echollm-sage/results/wildchat15k-sparq-incremental-<WILDCHAT_ARRAY_ID>/comparison"
+
+MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_both_sub1k.sh \
+  | tee "sub1k-submission-$(date +%Y%m%d-%H%M%S).log"
+```
+
+Each trace gets a 30-task CPU replay array and a dependent CPU merge job. The
+merge validates the six-policy grid, dataset statistics, effective config,
+artifact paths, and raw request-trace fingerprint before regenerating every
+plot. The submission output prints the concrete job IDs and paths. Final
+results are written to:
+
+```text
+$HOME/_experiments/echollm-sage/results/oasst1-sub1k-<array-job-id>/comparison/
+$HOME/_experiments/echollm-sage/results/wildchat15k-sub1k-<array-job-id>/comparison/
+```
+
+Override the capacity list with colon-separated values, while keeping every
+value below 1,000:
+
+```bash
+SUB1K_CACHE_SIZES=25:50:100:200:500 MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_both_sub1k.sh
+```
+
 Preview the runtime projection without submitting:
 
 ```bash

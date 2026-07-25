@@ -227,11 +227,6 @@ class ExperimentConfig(BaseModel):
         """Return a validated configuration for an incremental grid replay."""
         selected_policies = policies or self.policy.policies
         requested_sizes = cache_sizes or self.policy.cache_sizes
-        unknown_sizes = set(requested_sizes) - set(self.policy.cache_sizes)
-        if unknown_sizes:
-            raise ValueError(
-                f"Cache sizes are absent from the source grid: {sorted(unknown_sizes)}"
-            )
         selected_sizes = [
             size
             for size in requested_sizes

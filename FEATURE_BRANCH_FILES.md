@@ -19,8 +19,8 @@
 - `_experiments/trace.py`: shared trace construction.
 - `_experiments/runner.py`: full-grid or single-index policy replay and metrics.
 - `_experiments/aggregate.py`: validates and combines Slurm-array task outputs.
-- `_experiments/merge_results.py`: validates and merges SPARQ-only replay with
-  completed baseline results, then regenerates all-policy plots.
+- `_experiments/merge_results.py`: validates and merges SPARQ-only policies or
+  supplemental all-policy capacity ranges, then regenerates all-policy plots.
 - `_experiments/configs/oasst1_default.yaml`: OASST1 SAGE/SPARQ comparison.
 - `_experiments/configs/wildchat_15k.yaml`: first-15K WildChat SAGE/SPARQ comparison.
 - `_experiments/slurm/run_experiment.sh`: shared cluster runtime.
@@ -30,6 +30,9 @@
 - `_experiments/slurm/submit_*_sparq_only.sh`: incremental SPARQ-only CPU replay.
 - `_experiments/slurm/aggregate_incremental_policy.sbatch`: verified merge and
   all-policy plot generation.
+- `_experiments/slurm/submit_*_sub1k.sh`: all-policy supplemental sub-1K replay.
+- `_experiments/slurm/aggregate_incremental_capacities.sbatch`: verified
+  capacity-grid merge and plot generation.
 
 ## Validation
 

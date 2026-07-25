@@ -281,6 +281,30 @@ The baseline and SPARQ raw files remain in their original directories rather
 than being duplicated. Their locations and the verified trace fingerprint are
 recorded in `comparison/merge_manifest.json`.
 
+### Supplemental sub-1K replay
+
+To resolve the low-capacity region without repeating completed points, use the
+merged SPARQ comparison from each trace as the input:
+
+```bash
+export OASST_EXISTING_RESULTS="$HOME/_experiments/echollm-sage/results/oasst1-sparq-incremental-<OASST_ARRAY_ID>/comparison"
+export WILDCHAT_EXISTING_RESULTS="$HOME/_experiments/echollm-sage/results/wildchat15k-sparq-incremental-<WILDCHAT_ARRAY_ID>/comparison"
+
+MAX_CONCURRENT=8 \
+  bash _experiments/slurm/submit_both_sub1k.sh
+```
+
+The default grid is `[50, 100, 250, 500, 750]`. Every policy is replayed because
+a new capacity requires a new cache-state trajectory for each policy; only
+replaying SPARQ would not produce a valid comparison. Both arrays are CPU-only
+and reuse the existing recorded responses, prepared trace, and embedding cache.
+Each trace therefore submits 30 tasks followed by one dependent merge/plot job.
+
+The final combined results are under
+`results/<trace>-sub1k-<array-job-id>/comparison/`. Their summary and plots
+contain the original zero, 1K-and-above, and unbounded points together with the
+new sub-1K points. The source result directories remain unchanged.
+
 The preparation job uses `qwen3:4b-instruct` and `num_predict: 64`, records one
 real response per unique prompt, materializes the extracted trace, and computes
 the prompt/reference/generated-response embeddings once. Three waves of CPU-only
