@@ -28,7 +28,7 @@ def validate_incremental_setup(
     source_config_path: Path,
     *,
     policy: str = "SPARQ",
-) -> None:
+) -> list[int]:
     """Fail before submission when the proposed replay cannot be merged fairly."""
     baseline = _read_summary(baseline_directory)
     _validate_baseline_policies(baseline)
@@ -44,10 +44,15 @@ def validate_incremental_setup(
         source_config,
         compare_artifact_paths=False,
     )
-    _assert_matching_bounded_capacities(
-        baseline,
-        set(source_config.policy.cache_sizes),
-    )
+    baseline_capacities = _baseline_bounded_capacities(baseline)
+    source_capacities = set(source_config.policy.cache_sizes)
+    unavailable = baseline_capacities - source_capacities
+    if unavailable:
+        raise RuntimeError(
+            "Baseline bounded capacities are absent from the source config: "
+            f"{sorted(unavailable)}"
+        )
+    return sorted(baseline_capacities)
 
 
 def merge_policy_results(
@@ -184,19 +189,43 @@ def _assert_matching_bounded_capacities(
     baseline: pd.DataFrame,
     expected: set[int],
 ) -> None:
+    actual_by_policy = _bounded_capacities_by_policy(baseline)
+    for policy, actual in actual_by_policy.items():
+        if actual != expected:
+            raise RuntimeError(
+                f"{policy} bounded capacities {sorted(actual)} do not match "
+                f"the incremental capacities {sorted(expected)}"
+            )
+
+
+def _baseline_bounded_capacities(baseline: pd.DataFrame) -> set[int]:
+    actual_by_policy = _bounded_capacities_by_policy(baseline)
+    reference_policy = sorted(actual_by_policy)[0]
+    reference = actual_by_policy[reference_policy]
+    for policy, actual in actual_by_policy.items():
+        if actual != reference:
+            raise RuntimeError(
+                f"Baseline bounded capacities differ: {reference_policy} has "
+                f"{sorted(reference)}, while {policy} has {sorted(actual)}"
+            )
+    if not reference:
+        raise RuntimeError("Baseline contains no bounded cache capacities")
+    return reference
+
+
+def _bounded_capacities_by_policy(
+    baseline: pd.DataFrame,
+) -> dict[str, set[int]]:
+    result: dict[str, set[int]] = {}
     for policy in _REQUIRED_BASELINE_POLICIES:
-        actual = set(
+        result[policy] = set(
             baseline.loc[
                 (baseline["policy"] == policy)
                 & (baseline["capacity_mode"] == "bounded"),
                 "cache_size",
             ].astype(int)
         )
-        if actual != expected:
-            raise RuntimeError(
-                f"{policy} bounded capacities {sorted(actual)} do not match "
-                f"the incremental capacities {sorted(expected)}"
-            )
+    return result
 
 
 def _assert_compatible_configs(
@@ -333,12 +362,16 @@ def main() -> None:
 
     arguments = parser.parse_args()
     if arguments.command == "validate":
-        validate_incremental_setup(
+        capacities = validate_incremental_setup(
             arguments.baseline_dir,
             arguments.source_config,
             policy=arguments.policy,
         )
         print("Incremental experiment is compatible with the baseline.", flush=True)
+        print(
+            "CACHE_SIZES=" + ",".join(str(size) for size in capacities),
+            flush=True,
+        )
         return
     output = merge_policy_results(
         arguments.baseline_dir,

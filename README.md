@@ -166,11 +166,13 @@ MAX_CONCURRENT=8 \
   bash _experiments/slurm/submit_both_sparq_only.sh
 ```
 
-Each trace submits 15 CPU replay tasks: SPARQ at capacities 1,000 through
-15,000. The script reuses the baseline's recorded LLM database, prepared trace,
-and embedding cache. A dependent merge job validates the configurations,
-capacity grid, dataset statistics, and raw request-trace fingerprint before
-regenerating all-policy plots.
+Each trace submits one CPU replay task for every capacity marked `bounded` in
+the baseline. For the current results this is 14 tasks, covering 1,000 through
+14,000; the policy-independent 15,000 endpoint is copied during aggregation.
+The script derives this plan automatically and reuses the baseline's recorded
+LLM database, prepared trace, and embedding cache. A dependent merge job
+validates the configurations, capacity grid, dataset statistics, and raw
+request-trace fingerprint before regenerating all-policy plots.
 
 The submission output prints both job IDs and exact paths. Final merged results
 are written below:

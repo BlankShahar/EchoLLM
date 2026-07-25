@@ -24,6 +24,7 @@ def test_select_grid_builds_a_positive_sparq_only_replay() -> None:
 
     selected = config.select_grid(
         policies=["SPARQ"],
+        cache_sizes=[1_000, 2_000],
         positive_cache_sizes_only=True,
     )
 
@@ -88,7 +89,7 @@ def test_preflight_rejects_missing_baseline_capacity(tmp_path: Path) -> None:
         ExperimentConfig(
             policy=PolicyConfig(
                 policies=BASELINE_POLICIES + ["SPARQ"],
-                cache_sizes=[0, 1_000, 2_000],
+                cache_sizes=[0, 2_000],
                 include_unbounded_cache=False,
             )
         ).model_dump_json(indent=2),
@@ -98,9 +99,30 @@ def test_preflight_rejects_missing_baseline_capacity(tmp_path: Path) -> None:
     try:
         validate_incremental_setup(baseline, source)
     except RuntimeError as error:
-        assert "do not match the incremental capacities" in str(error)
+        assert "absent from the source config" in str(error)
     else:
         raise AssertionError("Expected a capacity mismatch to fail preflight")
+
+
+def test_preflight_returns_only_baseline_bounded_capacities(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline"
+    incremental = tmp_path / "incremental"
+    _write_result_directories(baseline, incremental)
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        ExperimentConfig(
+            policy=PolicyConfig(
+                policies=BASELINE_POLICIES + ["SPARQ"],
+                cache_sizes=[0, 1_000, 2_000],
+                include_unbounded_cache=False,
+            )
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    assert validate_incremental_setup(baseline, source) == [1_000]
 
 
 def _write_result_directories(

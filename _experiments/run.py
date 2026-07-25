@@ -40,6 +40,12 @@ def main() -> None:
         help="Exclude capacity zero and the synthetic unbounded endpoint",
     )
     parser.add_argument(
+        "--cache-sizes",
+        nargs="+",
+        type=int,
+        help="Restrict the grid to these configured cache capacities",
+    )
+    parser.add_argument(
         "--skip-plots",
         action="store_true",
         help="Do not generate plots (used by array tasks before aggregation)",
@@ -51,6 +57,7 @@ def main() -> None:
         config = ExperimentConfig.from_yaml(arguments.config)
         config = config.select_grid(
             policies=arguments.policies,
+            cache_sizes=arguments.cache_sizes,
             positive_cache_sizes_only=arguments.positive_cache_sizes_only,
         )
         embedding_updates = {}

@@ -259,9 +259,13 @@ MAX_CONCURRENT=8 \
   bash _experiments/slurm/submit_both_sparq_only.sh
 ```
 
-This creates two 15-task CPU arrays, one per trace. No Ollama process is started
-and no other policy is replayed. The submission script discovers and reuses the
-recorded backend, prepared pairs, and embedding cache from each baseline.
+This creates one CPU task per baseline capacity marked `bounded`, independently
+for each trace. In the current results that is 14 tasks for capacities 1,000
+through 14,000; the policy-independent 15,000 endpoint is reused during the
+merge. No Ollama process is started and no other policy is replayed. The
+submission script derives the array size and capacity filter from the baseline,
+then discovers and reuses its recorded backend, prepared pairs, and embedding
+cache.
 
 After each array succeeds, `aggregate_incremental_policy.sbatch`:
 

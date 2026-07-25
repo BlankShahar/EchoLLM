@@ -233,6 +233,10 @@ fi
 if [[ "${POSITIVE_CACHE_SIZES_ONLY:-0}" == "1" ]]; then
   GRID_ARGS+=(--positive-cache-sizes-only)
 fi
+if [[ -n "${CACHE_SIZE_FILTER:-}" ]]; then
+  IFS=',' read -r -a SELECTED_CACHE_SIZES <<<"$CACHE_SIZE_FILTER"
+  GRID_ARGS+=(--cache-sizes "${SELECTED_CACHE_SIZES[@]}")
+fi
 srun python -m _experiments.run \
   --config "$CONFIG_PATH" \
   "${LLM_ARGS[@]}" \
